@@ -1,0 +1,111 @@
+"use client";
+
+import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Check, ChevronsUpDown } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+
+type Item = {
+  _id: string;
+  name: string;
+  price: number;
+  quantity: number;
+  unit: string;
+};
+
+async function searchItems(q: string) {
+  const res = await fetch(`/api/search/items?q=${encodeURIComponent(q)}`);
+  if (!res.ok) throw new Error("Search failed");
+  const json = (await res.json()) as { data: Item[] };
+  return json.data;
+}
+
+export function ItemCombobox(props: {
+  value: string;
+  onChange: (id: string, item?: Item) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [q, setQ] = React.useState("");
+
+  const query = useQuery({
+    queryKey: ["search-items", q],
+    queryFn: () => searchItems(q),
+    enabled: open,
+  });
+
+  const selected = query.data?.find((i) => i._id === props.value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        type="button"
+        disabled={props.disabled}
+        aria-expanded={open}
+        className={cn(
+          buttonVariants({ variant: "outline" }),
+          "w-full justify-between font-normal",
+        )}
+      >
+        {selected
+          ? `${selected.name} (${selected.unit})`
+          : (props.placeholder ?? "Select item…")}
+        <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />
+      </PopoverTrigger>
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
+        <Command shouldFilter={false}>
+          <CommandInput
+            placeholder="Search items…"
+            value={q}
+            onValueChange={setQ}
+          />
+          <CommandList>
+            <CommandEmpty>
+              {query.isLoading ? "Loading…" : "No item found."}
+            </CommandEmpty>
+            <CommandGroup>
+              {query.data?.map((it) => (
+                <CommandItem
+                  key={it._id}
+                  value={it._id}
+                  onSelect={() => {
+                    props.onChange(it._id, it);
+                    setOpen(false);
+                  }}
+                >
+                  <Check
+                    className={cn(
+                      "mr-2 size-4",
+                      props.value === it._id ? "opacity-100" : "opacity-0",
+                    )}
+                  />
+                  <span className="truncate">
+                    {it.name} ({it.unit}){" "}
+                    <span className="text-muted-foreground">
+                      (₹{it.price} · stock {it.quantity})
+                    </span>
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}

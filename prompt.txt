@@ -1,0 +1,23 @@
+i want you to implement some features.
+currently even if some party is net possitive its still showing - sign infront of their balance field in /parties
+i currently have to click on the ledger button to acccess the ledger. make sure even if click anywhere i get to see the ledger (just good UX)
+same /parties/id it shows -₹19,680.00 but the account balance is net possitive  
+
+opening the bill in /bill/[id] is good but it doesnt make any sense when you can directly view a bill in /billing it helps me reduce some code and make the project more manageable
+give a print button in /billing page.
+ 
+in /payments page there is no way to robustly edit the payment
+in /parties there is no way to search party same in /credit, /inventory, /categories, /bank-accounts
+
+in /category i want the user to enter a color or gradient corresponding to the Category and in /dashboard show that color in Category mix
+
+while the dashboard screen is good its very unusable until the user can interact and click on the charts to get more insights
+make sure you do that
+
+there is no way to see properly payments make sure you add that and whenever a user clicks on payments in /parties/[id] i want you to show that clearly
+
+/inventory is good but i also want a way to see bills where that item of inventory was used with paginations.
+
+use proper pagination in billing showing or ledger details showing screens or anywhere , where you have to load list of data 
+
+only add a print button in / billing page, (only button no working until now)
