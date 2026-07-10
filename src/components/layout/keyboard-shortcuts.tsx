@@ -71,27 +71,7 @@ export function KeyboardShortcuts() {
       <Calculator open={calcOpen} onClose={() => setCalcOpen(false)} />
       {/* Bottom bar */}
       <div className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-between border-t bg-background/95 backdrop-blur px-4 py-1.5 text-xs text-muted-foreground">
-        <div className="flex items-center gap-4 overflow-x-auto scrollbar-hide">
-          {/* <span className="shrink-0 font-medium text-foreground/70">
-            Shortcuts:
-          </span> */}
-          {/* {SHORTCUTS.filter((s) => s.href)
-            .slice(0, 6)
-            .map((s) => (
-              <span key={s.label} className="shrink-0 flex items-center gap-1">
-                <kbd className="rounded border bg-muted px-1 py-0.5 font-mono text-[9px]">
-                  {s.displayKey}
-                </kbd>
-                {s.label}
-              </span>
-            ))}
-          <span className="shrink-0 flex items-center gap-1">
-            <kbd className="rounded border bg-muted px-1 py-0.5 font-mono text-[9px]">
-              Ctrl+Shift+A
-            </kbd>
-            Agent
-          </span> */}
-        </div>
+        <div className="flex items-center gap-4 overflow-x-auto scrollbar-hide" />
         <button
           onClick={() => setCalcOpen((o) => !o)}
           className={cn(

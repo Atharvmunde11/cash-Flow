@@ -189,32 +189,3 @@ html {
 .scrollbar-visible::-webkit-scrollbar-track {
   background: transparent;
 }
-
-.agent-scrollbar {
-  -ms-overflow-style: auto;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklch, var(--border) 78%, var(--background))
-    color-mix(in oklch, var(--background) 96%, var(--foreground));
-}
-
-.agent-scrollbar::-webkit-scrollbar {
-  display: block;
-  width: 12px;
-  height: 12px;
-}
-
-.agent-scrollbar::-webkit-scrollbar-track {
-  background: color-mix(in oklch, var(--background) 96%, var(--foreground));
-  border-radius: 999px;
-}
-
-.agent-scrollbar::-webkit-scrollbar-thumb {
-  background: color-mix(in oklch, var(--border) 78%, var(--background));
-  border: 2px solid
-    color-mix(in oklch, var(--background) 96%, var(--foreground));
-  border-radius: 999px;
-}
-
-.agent-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklch, var(--muted-foreground) 32%, var(--background));
-}

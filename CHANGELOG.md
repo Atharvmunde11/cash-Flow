@@ -22,6 +22,6 @@ All notable changes to this project will be documented in this file.
 - UPI QR codes read from Bank Accounts instead of environment variables
 - Business name on PDFs/prints comes from Settings
 
-### Notes
+### Removed
 
-- AI assistant UI exists but is experimental (dummy responses / optional Ollama)
+- Experimental AI assistant UI, voice transcription, and Ollama integration

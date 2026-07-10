@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # CashFlow
 
 Local-first accounting, billing, inventory, and credit tracking for small businesses. Built with **Next.js**, **SQLite (Prisma)**, and optional **Electron** desktop packaging.
@@ -16,8 +17,6 @@ No cloud account or `.env` file required — clone, install, migrate, and run. A
 - **Import from Tally or BUSY** (masters + vouchers)
 - Desktop app (Windows x64) via Electron
 - Docker deployment with persisted SQLite volume
-
-> **Experimental:** An AI assistant module exists in the codebase (`src/agent/`) with stub responses. It is not required for core accounting workflows. Optional Ollama integration is available via `/api/ai`.
 
 ## Architecture
 
@@ -48,7 +47,7 @@ Shop name, phone, address, and UPI IDs are stored in SQLite (Settings / Bank Acc
 ### Setup
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/Atharvmunde11/cash-Flow.git
 cd <your-clone-folder>
 npm install
 npx prisma migrate deploy
@@ -64,7 +63,6 @@ You only need environment variables for non-default deployments:
 | Variable | When needed |
 |----------|-------------|
 | `DATABASE_URL` | Custom SQLite path (Docker sets `file:/data/cashflow.db`) |
-| `OLLAMA_URL` / `OLLAMA_MODEL` | Local AI assistant (defaults to `http://127.0.0.1:11434`) |
 
 ## Import from Tally or BUSY
 
@@ -154,3 +152,7 @@ These steps are best done by the repo owner:
 5. **Security contact** — Update the email in [SECURITY.md](SECURITY.md) if needed
 6. **Smoke test** — Fresh clone on another machine: `npm ci && npx prisma migrate deploy && npm run dev`
 
+=======
+# cash-Flow
+Local-first billing, inventory, and accounting for small businesses. Next.js + SQLite, Tally/BUSY import, PDF invoices, Electron desktop. No cloud required.
+>>>>>>> 91475cfe904c296f739519850fb24647aafbda1a
