@@ -1,11 +1,6 @@
-import mongoose from "mongoose";
-import { Bill } from "@/models/Bill";
-import { Item } from "@/models/Item";
-import { Party } from "@/models/Party";
-import { LedgerTransaction } from "@/models/Transaction";
-import { Category } from "@/models/Category";
-import { cashFlowFromTransaction } from "@/lib/ledger";
-import { getRootCategoryIdFromMap } from "@/lib/services/category-service";
+import { Prisma } from "@prisma/client";
+import { db } from "@/lib/db";
+import { withMongoIds } from "@/lib/id-compat";
 
 function startEndOfLocalDay(d: Date): { start: Date; end: Date } {
   const start = new Date(d);
@@ -22,112 +17,150 @@ function addDays(d: Date, n: number): Date {
 }
 
 /** Revenue charts: sales only (exclude purchase bills). */
-function saleOnlyFilter(): Record<string, unknown> {
-  return {
-    $or: [{ billKind: { $exists: false } }, { billKind: "sale" }],
-  };
+function saleOnlyWhere() {
+  return { billKind: "sale" as const };
 }
 
 export async function getDashboardMetrics() {
   const { start: todayStart, end: todayEnd } = startEndOfLocalDay(new Date());
-  const { Payment } = await import("@/models/Payment");
+
+  const todayActivity = await db.bill.count({
+    where: {
+      billDate: { gte: todayStart, lt: todayEnd },
+      ...saleOnlyWhere(),
+    },
+  });
+
+  let metricsStart = todayStart;
+  let metricsEnd = todayEnd;
+  let metricsDayLabel = "Today";
+
+  if (todayActivity === 0) {
+    const latestBill = await db.bill.findFirst({
+      where: saleOnlyWhere(),
+      orderBy: { billDate: "desc" },
+      select: { billDate: true },
+    });
+    if (latestBill?.billDate) {
+      const latest = startEndOfLocalDay(latestBill.billDate);
+      metricsStart = latest.start;
+      metricsEnd = latest.end;
+      metricsDayLabel = latest.start.toLocaleDateString(undefined, {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+    }
+  }
 
   const [
-    todaySaleBills,
-    todayPurchaseBills,
-    todayPaymentsReceived,
-    todayPaymentsPaid,
-    todayPendingBills,
+    daySaleBills,
+    dayPurchaseBills,
+    dayPaymentsReceived,
+    dayPaymentsPaid,
+    dayPendingBills,
     lowStockItems,
-    todayAllBills,
+    dayCashBills,
+    dayCashPayments,
   ] = await Promise.all([
-    // Today's sale bill totals
-    Bill.aggregate<{ _id: null; revenue: number }>([
-      {
-        $match: {
-          billDate: { $gte: todayStart, $lt: todayEnd },
-          ...saleOnlyFilter(),
-        },
+    db.bill.aggregate({
+      where: { billDate: { gte: metricsStart, lt: metricsEnd }, ...saleOnlyWhere() },
+      _sum: { total: true },
+    }),
+    db.bill.aggregate({
+      where: {
+        billDate: { gte: metricsStart, lt: metricsEnd },
+        billKind: "purchase",
       },
-      { $group: { _id: null, revenue: { $sum: "$total" } } },
-    ]),
-    // Today's purchase bill totals
-    Bill.aggregate<{ _id: null; total: number }>([
-      {
-        $match: {
-          billDate: { $gte: todayStart, $lt: todayEnd },
-          billKind: "purchase",
-        },
+      _sum: { total: true },
+    }),
+    db.payment.aggregate({
+      where: {
+        date: { gte: metricsStart, lt: metricsEnd },
+        direction: "received",
       },
-      { $group: { _id: null, total: { $sum: "$total" } } },
-    ]),
-    // Payments received today (from customers)
-    Payment.aggregate<{ _id: null; total: number }>([
-      {
-        $match: {
-          date: { $gte: todayStart, $lt: todayEnd },
-          direction: "received",
-        },
+      _sum: { amount: true },
+    }),
+    db.payment.aggregate({
+      where: {
+        date: { gte: metricsStart, lt: metricsEnd },
+        direction: "paid",
       },
-      { $group: { _id: null, total: { $sum: "$amount" } } },
-    ]),
-    // Payments paid today (to suppliers)
-    Payment.aggregate<{ _id: null; total: number }>([
-      {
-        $match: {
-          date: { $gte: todayStart, $lt: todayEnd },
-          direction: "paid",
-        },
+      _sum: { amount: true },
+    }),
+    db.bill.aggregate({
+      where: {
+        billDate: { gte: metricsStart, lt: metricsEnd },
+        creditAmount: { gt: 0 },
       },
-      { $group: { _id: null, total: { $sum: "$amount" } } },
-    ]),
-    // Today's pending bills (credit amount from today's bills)
-    Bill.aggregate<{ _id: null; pending: number }>([
-      {
-        $match: {
-          billDate: { $gte: todayStart, $lt: todayEnd },
-          creditAmount: { $gt: 0 },
-        },
+      _sum: { creditAmount: true },
+    }),
+    db.$queryRaw<
+      Array<{
+        id: string;
+        name: string;
+        categoryId: string;
+        price: number;
+        purchasePrice: number;
+        quantity: number;
+        lowStockThreshold: number;
+        unit: string;
+        createdAt: string;
+        updatedAt: string;
+      }>
+    >(Prisma.sql`
+      SELECT *
+      FROM Item
+      WHERE quantity <= lowStockThreshold
+      ORDER BY quantity ASC
+      LIMIT 50
+    `),
+    db.bill.aggregate({
+      where: {
+        billDate: { gte: metricsStart, lt: metricsEnd },
+        ...saleOnlyWhere(),
+        paymentMode: "cash",
       },
-      { $group: { _id: null, pending: { $sum: "$creditAmount" } } },
-    ]),
-    // Low stock items
-    Item.find({
-      $expr: { $lte: ["$quantity", "$lowStockThreshold"] },
-    })
-      .sort({ quantity: 1 })
-      .limit(50)
-      .lean(),
-    // Today's total bill net amount (all bills)
-    Bill.aggregate<{ _id: null; net: number }>([
-      {
-        $match: {
-          billDate: { $gte: todayStart, $lt: todayEnd },
-        },
+      _sum: { paidAmount: true },
+    }),
+    db.payment.aggregate({
+      where: {
+        date: { gte: metricsStart, lt: metricsEnd },
+        direction: "received",
+        paymentMode: "cash",
       },
-      { $group: { _id: null, net: { $sum: "$total" } } },
-    ]),
+      _sum: { amount: true },
+    }),
   ]);
 
-  // Today's Revenue = sale bills + payments received - purchase bills - payments paid
-  const saleBillTotal = todaySaleBills[0]?.revenue ?? 0;
-  const purchaseBillTotal = todayPurchaseBills[0]?.total ?? 0;
-  const paymentsReceived = todayPaymentsReceived[0]?.total ?? 0;
-  const paymentsPaid = todayPaymentsPaid[0]?.total ?? 0;
-  const todayRevenue = saleBillTotal + paymentsReceived - purchaseBillTotal - paymentsPaid;
+  const saleBillTotal = daySaleBills._sum.total ?? 0;
+  const purchaseBillTotal = dayPurchaseBills._sum.total ?? 0;
+  const paymentsReceived = dayPaymentsReceived._sum.amount ?? 0;
+  const paymentsPaid = dayPaymentsPaid._sum.amount ?? 0;
+  const todayRevenue =
+    saleBillTotal + paymentsReceived - purchaseBillTotal - paymentsPaid;
 
-  // Pending payments = today's unpaid bill amounts
-  const pendingPayments = todayPendingBills[0]?.pending ?? 0;
+  const pendingPayments = dayPendingBills._sum.creditAmount ?? 0;
 
-  // Cash & UPI position = total net of all bills created today
-  const cashInHand = todayAllBills[0]?.net ?? 0;
+  const cashCollection =
+    (dayCashBills._sum.paidAmount ?? 0) + (dayCashPayments._sum.amount ?? 0);
 
   return {
     todayRevenue,
     pendingPayments,
-    cashInHand,
-    lowStockItems,
+    cashCollection,
+    metricsDayLabel,
+    lowStockItems: withMongoIds(lowStockItems),
   };
+}
+
+export async function getLatestSaleBillDate(): Promise<Date | null> {
+  const latest = await db.bill.findFirst({
+    where: saleOnlyWhere(),
+    orderBy: { billDate: "desc" },
+    select: { billDate: true },
+  });
+  return latest?.billDate ?? null;
 }
 
 export async function getDailyRevenueSeries(weekOffset: number) {
@@ -137,94 +170,80 @@ export async function getDailyRevenueSeries(weekOffset: number) {
   for (let i = 0; i < 7; i++) {
     const day = addDays(startDate, i);
     const { start, end } = startEndOfLocalDay(day);
-    const agg = await Bill.aggregate<{ _id: null; revenue: number }>([
-      {
-        $match: {
-          billDate: { $gte: start, $lt: end },
-          ...saleOnlyFilter(),
-        },
-      },
-      { $group: { _id: null, revenue: { $sum: "$total" } } },
-    ]);
+    const agg = await db.bill.aggregate({
+      where: { billDate: { gte: start, lt: end }, ...saleOnlyWhere() },
+      _sum: { total: true },
+    });
     days.push({
       key: start.toISOString().slice(0, 10),
       label: start.toLocaleDateString(undefined, {
         month: "short",
         day: "numeric",
       }),
-      revenue: agg[0]?.revenue ?? 0,
+      revenue: agg._sum.total ?? 0,
     });
   }
   return { weekOffset, days };
 }
 
-export type PieRange = "today" | "week" | "month";
+export type PieRange = "today" | "week" | "month" | "all";
 
 export async function getCategoryRevenuePie(range: PieRange) {
   const now = new Date();
-  let start: Date;
+  let billDateFilter: { gte: Date; lt: Date } | undefined;
+
   if (range === "today") {
-    start = startEndOfLocalDay(now).start;
+    const { start, end } = startEndOfLocalDay(now);
+    billDateFilter = { gte: start, lt: end };
   } else if (range === "week") {
-    start = addDays(now, -7);
-  } else {
-    start = addDays(now, -30);
+    const { start: todayStart, end } = startEndOfLocalDay(now);
+    billDateFilter = { gte: addDays(todayStart, -6), lt: end };
+  } else if (range === "month") {
+    const { start: todayStart, end } = startEndOfLocalDay(now);
+    billDateFilter = { gte: addDays(todayStart, -29), lt: end };
   }
 
-  const bills = await Bill.find({
-    createdAt: { $gte: start },
-    ...saleOnlyFilter(),
-  }).lean();
-  const itemIds = [
-    ...new Set(
-      bills.flatMap((b) =>
-        b.lines.map((l: { itemId: mongoose.Types.ObjectId }) =>
-          l.itemId.toString(),
-        ),
-      ),
-    ),
-  ].map((id) => new mongoose.Types.ObjectId(id));
-
-  const items = await Item.find({ _id: { $in: itemIds } }).lean();
-  const itemMap = new Map(items.map((i) => [i._id.toString(), i]));
-  const allCats = await Category.find({}).lean();
-  const catById = new Map(
-    allCats.map((c) => [
-      c._id.toString(),
-      {
-        _id: c._id as mongoose.Types.ObjectId,
-        parentId: c.parentId as mongoose.Types.ObjectId | null | undefined,
+  const [lines, allCats] = await Promise.all([
+    db.billLine.findMany({
+      where: {
+        bill: {
+          ...(billDateFilter ? { billDate: billDateFilter } : {}),
+          ...saleOnlyWhere(),
+        },
       },
-    ]),
-  );
+      select: {
+        lineTotal: true,
+        item: {
+          select: {
+            categoryId: true,
+          },
+        },
+      },
+      take: 20000,
+    }),
+    db.category.findMany({}),
+  ]);
+
+  const catMap = new Map(allCats.map((c) => [c.id, c]));
 
   const map = new Map<
     string,
     { id: string; name: string; value: number; color?: string | null }
   >();
 
-  for (const b of bills) {
-    for (const line of b.lines) {
-      const item = itemMap.get(
-        (line.itemId as mongoose.Types.ObjectId).toString(),
-      );
-      if (!item) continue;
-      const rootId = getRootCategoryIdFromMap(
-        item.categoryId as mongoose.Types.ObjectId,
-        catById,
-      );
-      const key = rootId.toString();
-      const name =
-        allCats.find((c) => c._id.toString() === rootId.toString())?.name ??
-        "Uncategorized";
-      const color =
-        allCats.find((c) => c._id.toString() === rootId.toString())?.color ??
-        null;
-      const prev = map.get(key) ?? { id: key, name, value: 0, color };
-      prev.value += line.lineTotal;
-      prev.color = color;
-      map.set(key, prev);
-    }
+  for (const l of lines) {
+    const leafCategoryId = l.item.categoryId;
+    const leaf = catMap.get(leafCategoryId);
+    const ancestors = (leaf?.ancestorIds as unknown as string[]) ?? [];
+    const rootId = ancestors.length > 0 ? ancestors[0] : leafCategoryId;
+    const root = catMap.get(rootId);
+    const key = rootId;
+    const name = root?.name ?? "Uncategorized";
+    const color = root?.color ?? null;
+    const prev = map.get(key) ?? { id: key, name, value: 0, color };
+    prev.value += l.lineTotal;
+    prev.color = color;
+    map.set(key, prev);
   }
 
   const rows = [...map.values()].sort((a, b) => b.value - a.value);
@@ -233,44 +252,64 @@ export async function getCategoryRevenuePie(range: PieRange) {
 }
 
 export async function getHourlyTraffic() {
-  const agg = await Bill.aggregate<{ _id: number; count: number }>([
-    { $match: saleOnlyFilter() },
-    {
-      $group: {
-        _id: "$hourOfDay",
-        count: { $sum: 1 },
-      },
-    },
-    { $sort: { _id: 1 } },
+  const [billAgg, paymentRows] = await Promise.all([
+    db.bill.groupBy({
+      by: ["hourOfDay"],
+      where: saleOnlyWhere(),
+      _count: { _all: true },
+      orderBy: { hourOfDay: "asc" },
+    }),
+    db.payment.findMany({
+      where: { direction: "received" },
+      select: { date: true },
+      take: 5000,
+    }),
   ]);
+
+  const hourCounts = new Map<number, number>();
+
+  for (const row of billAgg) {
+    hourCounts.set(
+      row.hourOfDay,
+      (hourCounts.get(row.hourOfDay) ?? 0) + row._count._all,
+    );
+  }
+
+  for (const payment of paymentRows) {
+    const hour = payment.date.getHours();
+    hourCounts.set(hour, (hourCounts.get(hour) ?? 0) + 1);
+  }
+
   const hours = Array.from({ length: 24 }, (_, h) => ({
     hour: h,
-    count: agg.find((x) => x._id === h)?.count ?? 0,
+    count: hourCounts.get(h) ?? 0,
   }));
-  const peak = hours.reduce(
+
+  const activeHours = hours.filter((h) => h.count > 0);
+  const peak = activeHours.reduce(
     (best, cur) => (cur.count > best.count ? cur : best),
-    hours[0] ?? { hour: 0, count: 0 },
+    activeHours[0] ?? { hour: 12, count: 0 },
   );
-  return { hours, peak };
+
+  return { hours, peak, activeHours };
 }
 
 export async function getCreditAlerts() {
-  const owing = await Party.find({
-    partyType: "customer",
-    balance: { $gt: 0 },
-  })
-    .sort({ balance: -1 })
-    .limit(10)
-    .lean();
+  const [owing, overdue] = await Promise.all([
+    db.party.findMany({
+      where: { partyType: "customer", balance: { gt: 0 } },
+      orderBy: { balance: "desc" },
+      take: 10,
+    }),
+    db.party.findMany({
+      where: { partyType: "customer", balance: { gt: 0 }, lastPaymentAt: { not: null } },
+      orderBy: { lastPaymentAt: "asc" },
+      take: 10,
+    }),
+  ]);
 
-  const overdue = await Party.find({
-    partyType: "customer",
-    balance: { $gt: 0 },
-    lastPaymentAt: { $ne: null },
-  })
-    .sort({ lastPaymentAt: 1 })
-    .limit(10)
-    .lean();
-
-  return { highestDues: owing, longestSincePayment: overdue };
+  return {
+    highestDues: withMongoIds(owing),
+    longestSincePayment: withMongoIds(overdue),
+  };
 }

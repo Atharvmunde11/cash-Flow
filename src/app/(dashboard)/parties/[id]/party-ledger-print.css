@@ -1,0 +1,106 @@
+/* Hide print container on screen */
+.party-ledger-print {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm 10mm 14mm 10mm;
+  }
+
+  /* Hide everything by default */
+  body * {
+    visibility: hidden !important;
+  }
+
+  /* Show only our print root */
+  #party-ledger-print-root,
+  #party-ledger-print-root * {
+    visibility: visible !important;
+  }
+
+  #party-ledger-print-root.party-ledger-print {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    color: #111 !important;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial,
+      "Noto Sans", "Liberation Sans", sans-serif !important;
+    font-size: 10pt !important;
+    line-height: 1.35 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .pl-header {
+    display: flex !important;
+    justify-content: space-between !important;
+    gap: 12mm !important;
+    align-items: flex-start !important;
+    margin: 0 0 5mm 0 !important;
+  }
+
+  .pl-title {
+    font-size: 16pt !important;
+    font-weight: 800 !important;
+    margin: 0 !important;
+  }
+
+  .pl-sub {
+    margin: 1mm 0 0 0 !important;
+    color: #444 !important;
+    font-size: 9pt !important;
+  }
+
+  .pl-meta {
+    text-align: right !important;
+    font-size: 9pt !important;
+    color: #444 !important;
+  }
+
+  .pl-meta b {
+    color: #111 !important;
+  }
+
+  .pl-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    border: 1pt solid #cfcfcf !important;
+  }
+
+  .pl-table th,
+  .pl-table td {
+    padding: 2.2mm 2.6mm !important;
+    border-bottom: 0.5pt solid #e6e6e6 !important;
+    vertical-align: top !important;
+  }
+
+  .pl-table th + th,
+  .pl-table td + td {
+    border-left: 0.5pt solid #e6e6e6 !important;
+  }
+
+  .pl-table thead th {
+    font-size: 8pt !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+    color: #111 !important;
+    border-bottom: 1pt solid #cfcfcf !important;
+  }
+
+  .pl-right {
+    text-align: right !important;
+    font-variant-numeric: tabular-nums !important;
+    white-space: nowrap !important;
+  }
+
+  .pl-muted {
+    color: #666 !important;
+  }
+}
+

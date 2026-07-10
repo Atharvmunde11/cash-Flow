@@ -1,17 +1,15 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
+import { withMongoId, withMongoIds } from "@/lib/id-compat";
 import { categoryCreateSchema } from "@/lib/validations";
-import { Category } from "@/models/Category";
-import { resolveAncestorIds } from "@/lib/services/category-service";
-import mongoose from "mongoose";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
     await connectDb();
-    const rows = await Category.find({}).sort({ name: 1 }).lean();
-    return jsonOk(rows);
+    const rows = await db.category.findMany({ orderBy: { name: "asc" } });
+    return jsonOk(withMongoIds(rows));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);
@@ -27,21 +25,29 @@ export async function POST(req: Request) {
       return jsonError(JSON.stringify(parsed.error.flatten()), 422);
     }
     const parentId =
-      parsed.data.parentId && parsed.data.parentId !== ""
-        ? new mongoose.Types.ObjectId(parsed.data.parentId)
+      parsed.data.parentId && parsed.data.parentId.trim() !== ""
+        ? parsed.data.parentId.trim()
         : null;
+
+    let ancestorIds: string[] = [];
     if (parentId) {
-      const p = await Category.findById(parentId).lean();
-      if (!p) return jsonError("Parent category not found", 400);
+      const parent = await db.category.findUnique({ where: { id: parentId } });
+      if (!parent) return jsonError("Parent category not found", 400);
+      const fromParent = Array.isArray(parent.ancestorIds)
+        ? (parent.ancestorIds as unknown as string[])
+        : [];
+      ancestorIds = [...fromParent, parentId];
     }
-    const ancestorIds = parentId ? await resolveAncestorIds(parentId) : [];
-    const row = await Category.create({
-      name: parsed.data.name.trim(),
-      parentId,
-      ancestorIds,
-      color: parsed.data.color ?? null,
+
+    const row = await db.category.create({
+      data: {
+        name: parsed.data.name.trim(),
+        parentId,
+        ancestorIds,
+        color: parsed.data.color ?? null,
+      },
     });
-    return jsonOk(row.toObject());
+    return jsonOk(withMongoId(row));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);

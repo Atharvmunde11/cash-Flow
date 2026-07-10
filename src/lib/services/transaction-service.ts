@@ -1,46 +1,48 @@
-import mongoose from "mongoose";
-import { Party } from "@/models/Party";
-import { LedgerTransaction } from "@/models/Transaction";
+import { db } from "@/lib/db";
 import { partyBalanceDelta } from "@/lib/ledger";
 import type { TransactionCreateInput } from "@/lib/validations";
 
-/** Runs without multi-document transactions (standalone mongod has no replica set). */
 export async function createManualTransaction(
-  input: TransactionCreateInput
-): Promise<{ id: mongoose.Types.ObjectId }> {
-  const party = await Party.findById(input.partyId);
-  if (!party) throw new Error("Party not found");
+  input: TransactionCreateInput,
+): Promise<{ id: string }> {
+  return db.$transaction(async (tx) => {
+    const party = await tx.party.findUnique({ where: { id: input.partyId } });
+    if (!party) throw new Error("Party not found");
 
-  let balance = party.balance;
-  balance += partyBalanceDelta(
-    party.partyType as "customer" | "supplier",
-    input.entryType,
-    input.amount
-  );
+    const balance =
+      party.balance +
+      partyBalanceDelta(
+        party.partyType as "customer" | "supplier",
+        input.entryType,
+        input.amount,
+      );
 
-  const [row] = await LedgerTransaction.create([
-    {
-      partyId: party._id,
-      partyType: party.partyType,
-      entryType: input.entryType,
-      amount: input.amount,
-      paymentMode: input.paymentMode,
-      date: input.date,
-      notes: input.notes ?? "",
-      refType: "manual",
-      balanceAfterParty: balance,
-    },
-  ]);
+    const row = await tx.ledgerTransaction.create({
+      data: {
+        partyId: party.id,
+        partyType: party.partyType,
+        entryType: input.entryType,
+        amount: input.amount,
+        paymentMode: input.paymentMode,
+        date: input.date,
+        notes: input.notes ?? "",
+        refType: "manual",
+        balanceAfterParty: balance,
+      },
+    });
 
-  party.balance = balance;
-  if (
-    party.partyType === "customer" &&
-    input.entryType === "credit" &&
-    input.amount > 0
-  ) {
-    party.lastPaymentAt = input.date;
-  }
-  await party.save();
+    await tx.party.update({
+      where: { id: party.id },
+      data: {
+        balance,
+        ...(party.partyType === "customer" &&
+        input.entryType === "credit" &&
+        input.amount > 0
+          ? { lastPaymentAt: input.date }
+          : {}),
+      },
+    });
 
-  return { id: row._id as mongoose.Types.ObjectId };
+    return { id: row.id };
+  });
 }

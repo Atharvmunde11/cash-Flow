@@ -1,15 +1,17 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
+import { withMongoId, withMongoIds } from "@/lib/id-compat";
 import { bankAccountCreateSchema } from "@/lib/validations";
-import { BankAccount } from "@/models/BankAccount";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
     await connectDb();
-    const rows = await BankAccount.find({}).sort({ isPrimary: -1, accountName: 1 }).lean();
-    return jsonOk(rows);
+    const rows = await db.bankAccount.findMany({
+      orderBy: [{ isPrimary: "desc" }, { accountName: "asc" }],
+    });
+    return jsonOk(withMongoIds(rows));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);
@@ -25,11 +27,11 @@ export async function POST(req: Request) {
 
     // If setting as primary, unset others
     if (parsed.data.isPrimary) {
-      await BankAccount.updateMany({}, { $set: { isPrimary: false } });
+      await db.bankAccount.updateMany({ data: { isPrimary: false } });
     }
 
-    const row = await BankAccount.create(parsed.data);
-    return jsonOk(row.toObject());
+    const row = await db.bankAccount.create({ data: parsed.data });
+    return jsonOk(withMongoId(row));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);

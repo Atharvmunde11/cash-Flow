@@ -1,9 +1,7 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
-import { escapeRegex } from "@/lib/string";
-import { Item } from "@/models/Item";
+import { withMongoId } from "@/lib/id-compat";
 import { itemUpdateSchema } from "@/lib/validations";
-import mongoose from "mongoose";
 
 export const runtime = "nodejs";
 
@@ -14,39 +12,46 @@ export async function PATCH(
   try {
     await connectDb();
     const { id } = await ctx.params;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return jsonError("Invalid id", 400);
     const body = await req.json();
     const parsed = itemUpdateSchema.safeParse(body);
     if (!parsed.success) {
       return jsonError(JSON.stringify(parsed.error.flatten()), 422);
     }
-    const item = await Item.findById(id);
+    const item = await db.item.findUnique({ where: { id } });
     if (!item) return jsonError("Not found", 404);
     if (parsed.data.name !== undefined) {
-      const dup = await Item.findOne({
-        _id: { $ne: item._id },
-        name: {
-          $regex: new RegExp(`^${escapeRegex(parsed.data.name.trim())}$`, "i"),
+      const name = parsed.data.name.trim();
+      const dup = await db.item.findFirst({
+        where: {
+          id: { not: id },
+          name,
         },
-      }).lean();
+      });
       if (dup) return jsonError("An item with this name already exists", 409);
-      item.name = parsed.data.name.trim();
+      const updated = await db.item.update({
+        where: { id },
+        data: { name },
+      });
+      return jsonOk(withMongoId(updated));
     }
-    if (parsed.data.categoryId !== undefined)
-      item.categoryId = parsed.data.categoryId;
-    if (parsed.data.price !== undefined) item.price = parsed.data.price;
+
+    const data: Record<string, unknown> = {};
+    if (parsed.data.categoryId !== undefined) data.categoryId = parsed.data.categoryId;
+    if (parsed.data.price !== undefined) data.price = parsed.data.price;
     if ("purchasePrice" in parsed.data && parsed.data.purchasePrice !== undefined) {
-      (item as unknown as { purchasePrice: number }).purchasePrice = parsed.data.purchasePrice;
+      data.purchasePrice = parsed.data.purchasePrice;
     }
-    if (parsed.data.quantity !== undefined)
-      item.quantity = parsed.data.quantity;
+    if (parsed.data.quantity !== undefined) data.quantity = parsed.data.quantity;
     if (parsed.data.lowStockThreshold !== undefined) {
-      item.lowStockThreshold = parsed.data.lowStockThreshold;
+      data.lowStockThreshold = parsed.data.lowStockThreshold;
     }
-    if (parsed.data.unit !== undefined) item.unit = parsed.data.unit;
-    await item.save();
-    return jsonOk(item.toObject());
+    if (parsed.data.unit !== undefined) data.unit = parsed.data.unit;
+
+    const updated = await db.item.update({
+      where: { id },
+      data,
+    });
+    return jsonOk(withMongoId(updated));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);
@@ -60,10 +65,9 @@ export async function DELETE(
   try {
     await connectDb();
     const { id } = await ctx.params;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return jsonError("Invalid id", 400);
-    const res = await Item.findByIdAndDelete(id);
-    if (!res) return jsonError("Not found", 404);
+    const existing = await db.item.findUnique({ where: { id } });
+    if (!existing) return jsonError("Not found", 404);
+    await db.item.delete({ where: { id } });
     return jsonOk({ ok: true });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";

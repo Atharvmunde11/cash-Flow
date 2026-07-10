@@ -1,11 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm, type Resolver, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
-import { itemCreateSchema, type ItemCreateInput } from "@/lib/validations";
+import {
+  itemCreateSchema,
+  itemUpdateSchema,
+  type ItemCreateInput,
+} from "@/lib/validations";
 import Link from "next/link";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -46,18 +50,27 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { formatMoney } from "@/lib/format";
 import { PaginationControls } from "@/components/shared/pagination-controls";
+import { useRouter } from "next/navigation";
+import { z } from "zod";
+import { DialogFooter } from "@/components/ui/dialog";
 
 type Item = {
   _id: string;
   name: string;
   categoryId: string;
   price: number;
+  purchasePrice: number;
   quantity: number;
   lowStockThreshold: number;
   unit: string;
 };
 
 type Cat = { _id: string; name: string };
+
+const editSchema = itemUpdateSchema.extend({
+  name: z.string().min(1).optional(),
+});
+type EditForm = z.infer<typeof editSchema>;
 
 async function fetchItems() {
   const res = await fetch("/api/items");
@@ -72,12 +85,44 @@ async function fetchCats() {
 }
 
 export default function InventoryPage() {
+  const router = useRouter();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const qc = useQueryClient();
   const items = useQuery({ queryKey: ["items"], queryFn: fetchItems });
   const cats = useQuery({ queryKey: ["categories"], queryFn: fetchCats });
+
+  // Persist inventory list state across tab switches.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        "cf_inventory_list",
+        JSON.stringify({ search, page }),
+      );
+      sessionStorage.setItem("cf_last_inventory_path", "/inventory");
+    } catch {
+      // ignore
+    }
+  }, [page, search]);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("cf_inventory_list");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { search?: string; page?: number };
+      if (typeof parsed.search === "string") setSearch(parsed.search);
+      if (typeof parsed.page === "number" && Number.isFinite(parsed.page)) {
+        setPage(Math.max(1, parsed.page));
+      }
+    } catch {
+      // ignore
+    }
+    // run only once
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -101,11 +146,30 @@ export default function InventoryPage() {
       name: "",
       categoryId: "",
       price: 0,
+      purchasePrice: 0,
       quantity: 0,
       lowStockThreshold: 5,
       unit: "",
     },
   });
+
+  const editForm = useForm<EditForm>({
+    resolver: zodResolver(editSchema) as Resolver<EditForm>,
+    defaultValues: {},
+  });
+
+  useEffect(() => {
+    if (!editingItem) return;
+    editForm.reset({
+      name: editingItem.name,
+      categoryId: editingItem.categoryId,
+      price: editingItem.price,
+      purchasePrice: (editingItem as any).purchasePrice ?? 0,
+      quantity: editingItem.quantity,
+      lowStockThreshold: editingItem.lowStockThreshold,
+      unit: editingItem.unit,
+    });
+  }, [editForm, editingItem]);
 
   const create = useMutation({
     mutationFn: async (values: ItemCreateInput) => {
@@ -125,11 +189,32 @@ export default function InventoryPage() {
         name: "",
         categoryId: "",
         price: 0,
+        purchasePrice: 0,
         quantity: 0,
         lowStockThreshold: 5,
         unit: "",
       });
       setDialogOpen(false);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const updateItem = useMutation({
+    mutationFn: async (payload: { id: string; values: EditForm }) => {
+      const res = await fetch(`/api/items/${payload.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload.values),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed");
+      return body;
+    },
+    onSuccess: () => {
+      toast.success("Item updated");
+      qc.invalidateQueries({ queryKey: ["items"] });
+      setEditOpen(false);
+      setEditingItem(null);
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -213,6 +298,14 @@ export default function InventoryPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
+                  <Label>Purchase price</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    {...form.register("purchasePrice", { valueAsNumber: true })}
+                  />
+                </div>
+                <div className="space-y-1.5">
                   <Label>Qty</Label>
                   <Input
                     type="number"
@@ -264,8 +357,16 @@ export default function InventoryPage() {
             {paginatedItems.map((it) => {
               const low = it.quantity <= it.lowStockThreshold;
               return (
-                <TableRow key={it._id}>
-                  <TableCell className="font-medium">{it.name}</TableCell>
+                <TableRow
+                  key={it._id}
+                  className="cursor-pointer"
+                  onClick={() => router.push(`/inventory/${it._id}`)}
+                >
+                  <TableCell className="font-medium">
+                    <span className="hover:underline underline-offset-4">
+                      {it.name}
+                    </span>
+                  </TableCell>
                   <TableCell>{catName(it.categoryId)}</TableCell>
                   <TableCell>{it.unit}</TableCell>
                   <TableCell className="text-right">
@@ -283,20 +384,29 @@ export default function InventoryPage() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex gap-2">
-                      <Link
-                        href={`/inventory/${it._id}`}
-                        className={cn(
-                          buttonVariants({ variant: "outline", size: "sm" }),
-                        )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setEditingItem(it);
+                          setEditOpen(true);
+                        }}
                       >
                         Edit
-                      </Link>
+                      </Button>
                       <AlertDialog>
                         <AlertDialogTrigger>
                           <Button
                             variant="outline"
                             size="sm"
                             className="text-destructive"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                            }}
                           >
                             Delete
                           </Button>
@@ -346,6 +456,110 @@ export default function InventoryPage() {
           onPageChange={setPage}
         />
       </div>
+
+      <Dialog
+        open={editOpen}
+        onOpenChange={(open) => {
+          setEditOpen(open);
+          if (!open) setEditingItem(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit item</DialogTitle>
+          </DialogHeader>
+
+          <form
+            className="space-y-3"
+            onSubmit={editForm.handleSubmit((v) => {
+              if (!editingItem) return;
+              updateItem.mutate({ id: editingItem._id, values: v });
+            })}
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="ename">Name</Label>
+              <Input id="ename" {...editForm.register("name")} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Category</Label>
+              <Controller
+                name="categoryId"
+                control={editForm.control}
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {cats.data?.map((c) => (
+                        <SelectItem key={c._id} value={c._id}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="eunit">Unit</Label>
+              <Input
+                id="eunit"
+                {...editForm.register("unit")}
+                placeholder="e.g., kg, pieces, liters"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label>Price</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  {...editForm.register("price", { valueAsNumber: true })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Purchase price</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  {...editForm.register("purchasePrice", { valueAsNumber: true })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Qty</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  {...editForm.register("quantity", { valueAsNumber: true })}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Low stock threshold</Label>
+              <Input
+                type="number"
+                {...editForm.register("lowStockThreshold", {
+                  valueAsNumber: true,
+                })}
+              />
+            </div>
+
+            <DialogFooter className="pt-2">
+              <Button type="submit" disabled={updateItem.isPending}>
+                {updateItem.isPending ? "Saving..." : "Save changes"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setEditOpen(false)}
+              >
+                Cancel
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,6 +1,7 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
-import { Item } from "@/models/Item";
+import { withMongoIds } from "@/lib/id-compat";
+import { Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
 
@@ -12,19 +13,37 @@ export async function GET(req: Request) {
     const limit = Math.min(50, Math.max(1, Number(searchParams.get("limit") ?? "20") || 20));
     const skip = (page - 1) * limit;
 
-    const filter = { $expr: { $lte: ["$quantity", "$lowStockThreshold"] } };
-
-    const [items, total] = await Promise.all([
-      Item.find(filter)
-        .sort({ quantity: 1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Item.countDocuments(filter),
+    const [items, totalRows] = await Promise.all([
+      db.$queryRaw<
+        Array<{
+          id: string;
+          name: string;
+          categoryId: string;
+          price: number;
+          purchasePrice: number;
+          quantity: number;
+          lowStockThreshold: number;
+          unit: string;
+          createdAt: string;
+          updatedAt: string;
+        }>
+      >(Prisma.sql`
+        SELECT *
+        FROM Item
+        WHERE quantity <= lowStockThreshold
+        ORDER BY quantity ASC
+        LIMIT ${limit} OFFSET ${skip}
+      `),
+      db.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+        SELECT COUNT(*) as total
+        FROM Item
+        WHERE quantity <= lowStockThreshold
+      `),
     ]);
+    const total = Number(totalRows?.[0]?.total ?? 0);
 
     return jsonOk({
-      items,
+      items: withMongoIds(items),
       total,
       page,
       limit,

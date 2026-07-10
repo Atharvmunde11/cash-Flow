@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/format";
 import { PaginationControls } from "@/components/shared/pagination-controls";
+import { useRouter } from "next/navigation";
 
 type Row = {
   _id: string;
@@ -45,7 +46,9 @@ export default function CreditPage() {
   const filteredDue = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return due.data ?? [];
-    return (due.data ?? []).filter((row) => row.name.toLowerCase().includes(query));
+    return (due.data ?? []).filter((row) =>
+      row.name.toLowerCase().includes(query),
+    );
   }, [due.data, search]);
 
   const filteredOverdue = useMemo(() => {
@@ -71,10 +74,11 @@ export default function CreditPage() {
     overduePage * pageSize,
   );
 
+  const router = useRouter();
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Credit</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Money Owed</h1>
         <p className="text-sm text-muted-foreground">
           Outstanding receivables with sorting by amount or quietest payers.
         </p>
@@ -107,7 +111,10 @@ export default function CreditPage() {
             </TableHeader>
             <TableBody>
               {paginatedDue.map((r) => (
-                <TableRow key={r._id}>
+                <TableRow
+                  key={r._id}
+                  onClick={() => router.push(`/parties/${r._id}`)}
+                >
                   <TableCell className="font-medium">{r.name}</TableCell>
                   <TableCell className="text-right">
                     {formatMoney(r.balance)}

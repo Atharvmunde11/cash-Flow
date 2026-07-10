@@ -9,6 +9,13 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
+/dist
+/release
+
+# electron desktop (optional — build locally; not published to GitHub)
+/electron/
+*.exe
+*.blockmap
 
 # testing
 /coverage
@@ -30,8 +37,22 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# local sqlite databases
+dev.db
+dev.db-shm
+dev.db-wal
+prisma/dev.db
+prisma/dev.db-shm
+prisma/dev.db-wal
+*.db
+*.db-shm
+*.db-wal
+
+# env files (optional overrides only)
+.env
+.env.local
+.env.production
+.env.development
 
 # vercel
 .vercel

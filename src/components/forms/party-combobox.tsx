@@ -48,6 +48,9 @@ export function PartyCombobox(props: {
   partyType?: "customer" | "supplier";
   placeholder?: string;
   disabled?: boolean;
+  hideChevron?: boolean;
+  triggerProps?: React.ComponentPropsWithoutRef<"button"> &
+    Partial<Record<`data-${string}`, string>>;
 }) {
   const [open, setOpen] = React.useState(false);
   const [q, setQ] = React.useState("");
@@ -70,15 +73,27 @@ export function PartyCombobox(props: {
         type="button"
         disabled={props.disabled}
         aria-expanded={open}
+        onKeyDown={(e) => {
+          props.triggerProps?.onKeyDown?.(e);
+          if (e.key === "Shift") {
+            e.preventDefault();
+            if (!props.disabled) setOpen((v) => !v);
+          }
+        }}
+        {...props.triggerProps}
         className={cn(
-          buttonVariants({ variant: "outline" }),
-          "w-full justify-between font-normal",
+          buttonVariants({ variant: props.hideChevron ? "ghost" : "outline" }),
+          "w-full font-normal",
+          props.hideChevron ? "justify-start" : "justify-between",
+          props.triggerProps?.className,
         )}
       >
         <span className="truncate">
           {display || props.placeholder || "Select party…"}
         </span>
-        <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />
+        {!props.hideChevron ? (
+          <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />
+        ) : null}
       </PopoverTrigger>
 
       <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">

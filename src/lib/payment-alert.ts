@@ -1,6 +1,4 @@
-import mongoose from "mongoose";
-import { Party } from "@/models/Party";
-import { LedgerTransaction } from "@/models/Transaction";
+import { db } from "@/lib/db";
 
 /**
  * Alert when a customer still owes money and has received no payment
@@ -12,11 +10,10 @@ export async function getCustomerPaymentStaleAlert(partyId: string): Promise<{
   days?: number;
   balance?: number;
 }> {
-  if (!mongoose.Types.ObjectId.isValid(partyId)) {
-    return { alert: false };
-  }
-  const oid = new mongoose.Types.ObjectId(partyId);
-  const party = await Party.findById(oid).lean();
+  const id = partyId.trim();
+  if (!id) return { alert: false };
+
+  const party = await db.party.findUnique({ where: { id } });
   if (!party || party.partyType !== "customer") {
     return { alert: false };
   }
@@ -32,19 +29,17 @@ export async function getCustomerPaymentStaleAlert(partyId: string): Promise<{
   since.setHours(0, 0, 0, 0);
   since.setDate(since.getDate() - days);
 
-  const agg = await LedgerTransaction.aggregate<{ total: number }>([
-    {
-      $match: {
-        partyId: oid,
-        partyType: "customer",
-        entryType: "credit",
-        date: { $gte: since },
-      },
+  const agg = await db.ledgerTransaction.aggregate({
+    where: {
+      partyId: id,
+      partyType: "customer",
+      entryType: "credit",
+      date: { gte: since },
     },
-    { $group: { _id: null, total: { $sum: "$amount" } } },
-  ]);
+    _sum: { amount: true },
+  });
 
-  const paidInWindow = agg[0]?.total ?? 0;
+  const paidInWindow = agg._sum.amount ?? 0;
   if (paidInWindow > 1e-9) {
     return { alert: false };
   }

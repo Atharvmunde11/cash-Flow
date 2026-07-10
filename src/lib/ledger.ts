@@ -1,5 +1,3 @@
-import type { PartyDocument } from "@/models/Party";
-
 export type PartyType = "customer" | "supplier";
 export type EntryType = "credit" | "debit";
 
@@ -43,7 +41,7 @@ export function cashFlowFromTransaction(input: {
 }
 
 export function assertPartyForTransaction(
-  party: PartyDocument,
+  party: { partyType: PartyType },
   expected: PartyType
 ) {
   if (party.partyType !== expected) {

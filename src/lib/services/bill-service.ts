@@ -1,9 +1,5 @@
-import mongoose from "mongoose";
-import { Bill } from "@/models/Bill";
-import { Item } from "@/models/Item";
-import { Party } from "@/models/Party";
-import { LedgerTransaction } from "@/models/Transaction";
-import { getNextBillNumber } from "@/models/Counter";
+import { db } from "@/lib/db";
+import { getNextBillNumber } from "@/lib/counter";
 import { assertPartyForTransaction, partyBalanceDelta } from "@/lib/ledger";
 import type { BillCreateInput } from "@/lib/validations";
 
@@ -13,7 +9,7 @@ type SundryChargeInput = {
 };
 
 export type StockWarning = {
-  itemId: mongoose.Types.ObjectId;
+  itemId: string;
   itemName: string;
   requested: number;
   available: number;
@@ -40,11 +36,14 @@ function paymentLedgerMode(
   return inputMode === "upi" || inputMode === "bank" ? "upi" : "cash";
 }
 
-/** Runs without multi-document transactions (standalone mongod has no replica set). */
+/** Runs bill creation and side effects in a single SQLite transaction. */
 export async function createBillWithSideEffects(
-  input: BillCreateInput & { sundryCharges?: SundryChargeInput[] },
+  input: BillCreateInput & {
+    sundryCharges?: SundryChargeInput[];
+    billNumberOverride?: string;
+  },
 ): Promise<{
-  billId: mongoose.Types.ObjectId;
+  billId: string;
   billNumber: string;
   stockWarnings: StockWarning[];
 }> {
@@ -55,314 +54,330 @@ export async function createBillWithSideEffects(
 }
 
 async function createSaleBillWithSideEffects(
-  input: BillCreateInput & { sundryCharges?: SundryChargeInput[] },
+  input: BillCreateInput & {
+    sundryCharges?: SundryChargeInput[];
+    billNumberOverride?: string;
+  },
 ): Promise<{
-  billId: mongoose.Types.ObjectId;
+  billId: string;
   billNumber: string;
   stockWarnings: StockWarning[];
 }> {
-  const party =
-    input.partyId && mongoose.Types.ObjectId.isValid(input.partyId)
-      ? await Party.findById(input.partyId)
+  return db.$transaction(async (tx) => {
+    const party = input.partyId
+      ? await tx.party.findUnique({ where: { id: input.partyId } })
       : null;
 
-  if (input.partyId && !party) throw new Error("Party not found");
-  if (party) assertPartyForTransaction(party, "customer");
+    if (input.partyId && !party) throw new Error("Party not found");
+    if (party) assertPartyForTransaction(party as { partyType: "customer" | "supplier" }, "customer");
 
-  const lines: Array<{
-    itemId: mongoose.Types.ObjectId;
-    name: string;
-    quantity: number;
-    unitPrice: number;
-    purchasePrice: number;
-    lineTotal: number;
-  }> = [];
+    const stockWarnings: StockWarning[] = [];
+    const sundryCharges = (input.sundryCharges ?? [])
+      .map((charge) => ({
+        label: charge.label.trim(),
+        amount: Number(charge.amount) || 0,
+      }))
+      .filter((charge) => charge.label.length > 0 || charge.amount > 0);
 
-  const stockWarnings: StockWarning[] = [];
-  const sundryCharges = (input.sundryCharges ?? [])
-    .map((charge) => ({
-      label: charge.label.trim(),
-      amount: Number(charge.amount) || 0,
-    }))
-    .filter((charge) => charge.label.length > 0 || charge.amount > 0);
+    const builtLines: Array<{
+      itemId: string;
+      name: string;
+      quantity: number;
+      unitPrice: number;
+      purchasePrice: number;
+      lineTotal: number;
+    }> = [];
 
-  for (const line of input.lines) {
-    const item = await Item.findById(line.itemId);
-    if (!item) throw new Error(`Item not found: ${line.itemId}`);
-    const unitPrice =
-      line.unitPrice !== undefined ? line.unitPrice : item.price;
-    const lineTotal = unitPrice * line.quantity;
-    const nextQty = item.quantity - line.quantity;
-    if (nextQty < 0) {
-      stockWarnings.push({
-        itemId: item._id,
-        itemName: item.name,
-        requested: line.quantity,
-        available: item.quantity,
-        appliedNegative: false,
+    for (const line of input.lines) {
+      const item = await tx.item.findUnique({ where: { id: line.itemId } });
+      if (!item) throw new Error(`Item not found: ${line.itemId}`);
+      const unitPrice = line.unitPrice !== undefined ? line.unitPrice : item.price;
+      const lineTotal = unitPrice * line.quantity;
+      const nextQty = item.quantity - line.quantity;
+      if (nextQty < 0) {
+        stockWarnings.push({
+          itemId: item.id,
+          itemName: item.name,
+          requested: line.quantity,
+          available: item.quantity,
+          appliedNegative: false,
+        });
+        if (!input.allowNegativeStock) {
+          throw new Error(
+            `Insufficient stock for "${item.name}". Available ${item.quantity}, requested ${line.quantity}.`,
+          );
+        }
+      }
+      builtLines.push({
+        itemId: item.id,
+        name: item.name,
+        quantity: line.quantity,
+        unitPrice,
+        purchasePrice: item.purchasePrice ?? 0,
+        lineTotal,
       });
-      if (!input.allowNegativeStock) {
-        throw new Error(
-          `Insufficient stock for "${item.name}". Available ${item.quantity}, requested ${line.quantity}.`,
-        );
+    }
+
+    const total =
+      builtLines.reduce((s, l) => s + l.lineTotal, 0) +
+      sundryCharges.reduce((s, charge) => s + charge.amount, 0);
+    if (total <= 0) throw new Error("Bill total must be positive");
+
+    const paid = Math.min(input.paidAmount, total);
+    const creditAmount = total - paid;
+
+    if (input.paymentMode === "credit" && paid > 0) {
+      throw new Error("Credit bills cannot include paid amount");
+    }
+
+    // Apply stock updates
+    for (const built of builtLines) {
+      const item = await tx.item.findUnique({ where: { id: built.itemId } });
+      if (!item) throw new Error("Item missing");
+      const nextQty = item.quantity - built.quantity;
+      await tx.item.update({
+        where: { id: item.id },
+        data: { quantity: nextQty },
+      });
+      if (nextQty < 0) {
+        const w = stockWarnings.find((x) => x.itemId === item.id);
+        if (w) w.appliedNegative = true;
       }
     }
-    lines.push({
-      itemId: item._id,
-      name: item.name,
-      quantity: line.quantity,
-      unitPrice,
-      purchasePrice: (item as { purchasePrice?: number }).purchasePrice ?? 0,
-      lineTotal,
-    });
-  }
 
-  const total =
-    lines.reduce((s, l) => s + l.lineTotal, 0) +
-    sundryCharges.reduce((s, charge) => s + charge.amount, 0);
-  if (total <= 0) throw new Error("Bill total must be positive");
+    const docPaymentMode = resolveDocPaymentMode(input.paymentMode, paid, creditAmount);
 
-  const paid = Math.min(input.paidAmount, total);
-  const creditAmount = total - paid;
-
-  if (input.paymentMode === "credit" && paid > 0) {
-    throw new Error("Credit bills cannot include paid amount");
-  }
-
-  for (let i = 0; i < lines.length; i++) {
-    const built = lines[i];
-    const item = await Item.findById(built.itemId);
-    if (!item) throw new Error("Item missing");
-    const nextQty = item.quantity - built.quantity;
-    item.quantity = nextQty;
-    await item.save();
-    if (nextQty < 0) {
-      const w = stockWarnings.find((x) => x.itemId.equals(item._id));
-      if (w) w.appliedNegative = true;
+    let billNumber = input.billNumberOverride?.trim();
+    if (billNumber) {
+      const exists = await tx.bill.findUnique({ where: { billNumber } });
+      if (exists) throw new Error(`Bill number already exists: ${billNumber}`);
+    } else {
+      billNumber = await getNextBillNumber("sale");
     }
-  }
+    const billDate = input.billDate;
+    const hourOfDay = billDate.getHours();
 
-  const docPaymentMode = resolveDocPaymentMode(
-    input.paymentMode,
-    paid,
-    creditAmount,
-  );
+    const bill = await tx.bill.create({
+      data: {
+        billKind: "sale",
+        billDate,
+        billNumber,
+        partyId: party ? party.id : null,
+        displayName: input.displayName ?? "",
+        total,
+        paidAmount: paid,
+        creditAmount,
+        paymentMode: docPaymentMode,
+        bankAccountId: input.bankAccountId ?? null,
+        hourOfDay,
+        notes: input.notes ?? "",
+        lines: { create: builtLines },
+        sundryCharges: { create: sundryCharges },
+        stockWarnings: {
+          create: stockWarnings.map((w) => ({
+            itemId: w.itemId,
+            itemName: w.itemName,
+            requested: w.requested,
+            available: w.available,
+            appliedNegative: w.appliedNegative,
+          })),
+        },
+      },
+    });
 
-  const billNumber = await getNextBillNumber("sale");
-  const billDate = input.billDate;
-  const hourOfDay = billDate.getHours();
+    if (party) {
+      let balance = party.balance;
+      balance += partyBalanceDelta("customer", "debit", total);
 
-  const [bill] = await Bill.create([
-    {
-      billKind: "sale" as const,
-      billDate,
-      billNumber,
-      partyId: party ? party._id : undefined,
-      displayName: input.displayName ?? "",
-      lines,
-      sundryCharges,
-      total,
-      paidAmount: paid,
-      creditAmount,
-      paymentMode: docPaymentMode,
-      bankAccountId: input.bankAccountId,
-      hourOfDay,
-      notes: input.notes ?? "",
-      stockWarnings: stockWarnings.map((w) => ({
-        itemId: w.itemId,
-        itemName: w.itemName,
-        requested: w.requested,
-        available: w.available,
-        appliedNegative: w.appliedNegative,
-      })),
-    },
-  ]);
+      await tx.ledgerTransaction.create({
+        data: {
+          partyId: party.id,
+          partyType: "customer",
+          entryType: "debit",
+          amount: total,
+          paymentMode: "credit",
+          date: billDate,
+          notes: `Bill ${billNumber}`,
+          refType: "bill_invoice",
+          billId: bill.id,
+          balanceAfterParty: balance,
+        },
+      });
 
-  if (party) {
+      if (paid > 0) {
+        const payMode = paymentLedgerMode(input.paymentMode);
+        balance += partyBalanceDelta("customer", "credit", paid);
+        await tx.ledgerTransaction.create({
+          data: {
+            partyId: party.id,
+            partyType: "customer",
+            entryType: "credit",
+            amount: paid,
+            paymentMode: payMode,
+            date: billDate,
+            notes: `Payment for ${billNumber}`,
+            refType: "bill_payment",
+            billId: bill.id,
+            balanceAfterParty: balance,
+          },
+        });
+        await tx.party.update({
+          where: { id: party.id },
+          data: { lastPaymentAt: billDate },
+        });
+      }
+
+      await tx.party.update({
+        where: { id: party.id },
+        data: { balance },
+      });
+    }
+
+    return { billId: bill.id, billNumber, stockWarnings };
+  });
+}
+
+async function createPurchaseBillWithSideEffects(
+  input: BillCreateInput & {
+    sundryCharges?: SundryChargeInput[];
+    billNumberOverride?: string;
+  },
+): Promise<{
+  billId: string;
+  billNumber: string;
+  stockWarnings: StockWarning[];
+}> {
+  return db.$transaction(async (tx) => {
+    const party = await tx.party.findUnique({ where: { id: input.partyId } });
+    if (!party) throw new Error("Party not found");
+    assertPartyForTransaction(party as { partyType: "customer" | "supplier" }, "supplier");
+
+    const sundryCharges = (input.sundryCharges ?? [])
+      .map((charge) => ({
+        label: charge.label.trim(),
+        amount: Number(charge.amount) || 0,
+      }))
+      .filter((charge) => charge.label.length > 0 || charge.amount > 0);
+
+    const builtLines: Array<{
+      itemId: string;
+      name: string;
+      quantity: number;
+      unitPrice: number;
+      purchasePrice: number;
+      lineTotal: number;
+    }> = [];
+
+    for (const line of input.lines) {
+      const item = await tx.item.findUnique({ where: { id: line.itemId } });
+      if (!item) throw new Error(`Item not found: ${line.itemId}`);
+      const unitPrice = line.unitPrice !== undefined ? line.unitPrice : item.price;
+      const lineTotal = unitPrice * line.quantity;
+      builtLines.push({
+        itemId: item.id,
+        name: item.name,
+        quantity: line.quantity,
+        unitPrice,
+        purchasePrice: item.purchasePrice ?? 0,
+        lineTotal,
+      });
+    }
+
+    const total =
+      builtLines.reduce((s, l) => s + l.lineTotal, 0) +
+      sundryCharges.reduce((s, charge) => s + charge.amount, 0);
+    if (total <= 0) throw new Error("Purchase total must be positive");
+
+    const paid = Math.min(input.paidAmount, total);
+    const creditAmount = total - paid;
+
+    if (input.paymentMode === "credit" && paid > 0) {
+      throw new Error("Credit purchase cannot include paid amount");
+    }
+
+    for (const built of builtLines) {
+      const item = await tx.item.findUnique({ where: { id: built.itemId } });
+      if (!item) throw new Error("Item missing");
+      await tx.item.update({
+        where: { id: item.id },
+        data: { quantity: item.quantity + built.quantity },
+      });
+    }
+
+    const docPaymentMode = resolveDocPaymentMode(input.paymentMode, paid, creditAmount);
+
+    let billNumber = input.billNumberOverride?.trim();
+    if (billNumber) {
+      const exists = await tx.bill.findUnique({ where: { billNumber } });
+      if (exists) throw new Error(`Bill number already exists: ${billNumber}`);
+    } else {
+      billNumber = await getNextBillNumber("purchase");
+    }
+    const billDate = input.billDate;
+    const hourOfDay = billDate.getHours();
+
+    const bill = await tx.bill.create({
+      data: {
+        billKind: "purchase",
+        billDate,
+        billNumber,
+        partyId: party.id,
+        displayName: input.displayName ?? "",
+        total,
+        paidAmount: paid,
+        creditAmount,
+        paymentMode: docPaymentMode,
+        bankAccountId: input.bankAccountId ?? null,
+        hourOfDay,
+        notes: input.notes ?? "",
+        lines: { create: builtLines },
+        sundryCharges: { create: sundryCharges },
+      },
+    });
+
     let balance = party.balance;
-    balance += partyBalanceDelta("customer", "debit", total);
+    balance += partyBalanceDelta("supplier", "credit", total);
 
-    await LedgerTransaction.create([
-      {
-        partyId: party._id,
-        partyType: "customer",
-        entryType: "debit",
+    await tx.ledgerTransaction.create({
+      data: {
+        partyId: party.id,
+        partyType: "supplier",
+        entryType: "credit",
         amount: total,
         paymentMode: "credit",
         date: billDate,
-        notes: `Bill ${billNumber}`,
-        refType: "bill_invoice",
-        billId: bill._id,
+        notes: `Purchase ${billNumber}`,
+        refType: "purchase_invoice",
+        billId: bill.id,
         balanceAfterParty: balance,
       },
-    ]);
+    });
 
     if (paid > 0) {
       const payMode = paymentLedgerMode(input.paymentMode);
-      balance += partyBalanceDelta("customer", "credit", paid);
-      party.lastPaymentAt = billDate;
-      await LedgerTransaction.create([
-        {
-          partyId: party._id,
-          partyType: "customer",
-          entryType: "credit",
+      balance += partyBalanceDelta("supplier", "debit", paid);
+      await tx.ledgerTransaction.create({
+        data: {
+          partyId: party.id,
+          partyType: "supplier",
+          entryType: "debit",
           amount: paid,
           paymentMode: payMode,
           date: billDate,
           notes: `Payment for ${billNumber}`,
-          refType: "bill_payment",
-          billId: bill._id,
+          refType: "purchase_payment",
+          billId: bill.id,
           balanceAfterParty: balance,
         },
-      ]);
+      });
+      await tx.party.update({
+        where: { id: party.id },
+        data: { lastPaymentAt: billDate },
+      });
     }
 
-    party.balance = balance;
-    await party.save();
-  }
+    await tx.party.update({ where: { id: party.id }, data: { balance } });
 
-  return {
-    billId: bill._id as mongoose.Types.ObjectId,
-    billNumber,
-    stockWarnings,
-  };
-}
-
-async function createPurchaseBillWithSideEffects(
-  input: BillCreateInput & { sundryCharges?: SundryChargeInput[] },
-): Promise<{
-  billId: mongoose.Types.ObjectId;
-  billNumber: string;
-  stockWarnings: StockWarning[];
-}> {
-  const party = await Party.findById(input.partyId);
-  if (!party) throw new Error("Party not found");
-  assertPartyForTransaction(party, "supplier");
-
-  const lines: Array<{
-    itemId: mongoose.Types.ObjectId;
-    name: string;
-    quantity: number;
-    unitPrice: number;
-    purchasePrice: number;
-    lineTotal: number;
-  }> = [];
-  const sundryCharges = (input.sundryCharges ?? [])
-    .map((charge) => ({
-      label: charge.label.trim(),
-      amount: Number(charge.amount) || 0,
-    }))
-    .filter((charge) => charge.label.length > 0 || charge.amount > 0);
-
-  for (const line of input.lines) {
-    const item = await Item.findById(line.itemId);
-    if (!item) throw new Error(`Item not found: ${line.itemId}`);
-    const unitPrice =
-      line.unitPrice !== undefined ? line.unitPrice : item.price;
-    const lineTotal = unitPrice * line.quantity;
-    lines.push({
-      itemId: item._id,
-      name: item.name,
-      quantity: line.quantity,
-      unitPrice,
-      purchasePrice: (item as { purchasePrice?: number }).purchasePrice ?? 0,
-      lineTotal,
-    });
-  }
-
-  const total =
-    lines.reduce((s, l) => s + l.lineTotal, 0) +
-    sundryCharges.reduce((s, charge) => s + charge.amount, 0);
-  if (total <= 0) throw new Error("Purchase total must be positive");
-
-  const paid = Math.min(input.paidAmount, total);
-  const creditAmount = total - paid;
-
-  if (input.paymentMode === "credit" && paid > 0) {
-    throw new Error("Credit purchase cannot include paid amount");
-  }
-
-  for (const built of lines) {
-    const item = await Item.findById(built.itemId);
-    if (!item) throw new Error("Item missing");
-    item.quantity += built.quantity;
-    await item.save();
-  }
-
-  const docPaymentMode = resolveDocPaymentMode(
-    input.paymentMode,
-    paid,
-    creditAmount,
-  );
-
-  const billNumber = await getNextBillNumber("purchase");
-  const billDate = input.billDate;
-  const hourOfDay = billDate.getHours();
-
-  const [bill] = await Bill.create([
-    {
-      billKind: "purchase" as const,
-      billDate,
-      billNumber,
-      partyId: party._id,
-      displayName: input.displayName ?? "",
-      lines,
-      sundryCharges,
-      total,
-      paidAmount: paid,
-      creditAmount,
-      paymentMode: docPaymentMode,
-      bankAccountId: input.bankAccountId,
-      hourOfDay,
-      notes: input.notes ?? "",
-      stockWarnings: [],
-    },
-  ]);
-
-  let balance = party.balance;
-  balance += partyBalanceDelta("supplier", "credit", total);
-
-  await LedgerTransaction.create([
-    {
-      partyId: party._id,
-      partyType: "supplier",
-      entryType: "credit",
-      amount: total,
-      paymentMode: "credit",
-      date: billDate,
-      notes: `Purchase ${billNumber}`,
-      refType: "purchase_invoice",
-      billId: bill._id,
-      balanceAfterParty: balance,
-    },
-  ]);
-
-  if (paid > 0) {
-    const payMode = paymentLedgerMode(input.paymentMode);
-    balance += partyBalanceDelta("supplier", "debit", paid);
-    party.lastPaymentAt = billDate;
-    await LedgerTransaction.create([
-      {
-        partyId: party._id,
-        partyType: "supplier",
-        entryType: "debit",
-        amount: paid,
-        paymentMode: payMode,
-        date: billDate,
-        notes: `Payment for ${billNumber}`,
-        refType: "purchase_payment",
-        billId: bill._id,
-        balanceAfterParty: balance,
-      },
-    ]);
-  }
-
-  party.balance = balance;
-  await party.save();
-
-  return {
-    billId: bill._id as mongoose.Types.ObjectId,
-    billNumber,
-    stockWarnings: [],
-  };
+    return { billId: bill.id, billNumber, stockWarnings: [] };
+  });
 }

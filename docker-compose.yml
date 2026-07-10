@@ -1,0 +1,17 @@
+services:
+  cashflow:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      # Override if you want a different location inside the container
+      DATABASE_URL: "file:/data/cashflow.db"
+      NODE_ENV: "production"
+      # Required for API access from outside the container (see SECURITY.md)
+      ALLOW_REMOTE_ACCESS: "1"
+    volumes:
+      - cashflow-data:/data
+
+volumes:
+  cashflow-data:
+

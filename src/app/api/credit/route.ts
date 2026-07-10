@@ -1,6 +1,6 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
-import { Party } from "@/models/Party";
+import { withMongoIds } from "@/lib/id-compat";
 
 export const runtime = "nodejs";
 
@@ -11,20 +11,22 @@ export async function GET(req: Request) {
     const sort = searchParams.get("sort") ?? "due";
     const rows =
       sort === "overdue"
-        ? await Party.find({
-            partyType: "customer",
-            balance: { $gt: 0 },
-            lastPaymentAt: { $ne: null },
+        ? await db.party.findMany({
+            where: {
+              partyType: "customer",
+              balance: { gt: 0 },
+              lastPaymentAt: { not: null },
+            },
+            orderBy: { lastPaymentAt: "asc" },
+            take: 100,
           })
-            .sort({ lastPaymentAt: 1 })
-            .limit(100)
-            .lean()
-        : await Party.find({ partyType: "customer", balance: { $gt: 0 } })
-            .sort({ balance: -1 })
-            .limit(100)
-            .lean();
+        : await db.party.findMany({
+            where: { partyType: "customer", balance: { gt: 0 } },
+            orderBy: { balance: "desc" },
+            take: 100,
+          });
 
-    const withDays = rows.map((p) => {
+    const withDays = withMongoIds(rows).map((p) => {
       const last = p.lastPaymentAt ? new Date(p.lastPaymentAt) : null;
       const daysSince = last
         ? Math.floor((Date.now() - last.getTime()) / (1000 * 60 * 60 * 24))

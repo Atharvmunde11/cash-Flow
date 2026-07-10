@@ -1,0 +1,14 @@
+node_modules
+.next
+dist
+out
+.turbo
+.cache
+.git
+.env
+.env.*
+*.log
+dev.db
+dev.db-*
+prisma/dev.db
+prisma/dev.db-*

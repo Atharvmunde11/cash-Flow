@@ -3,7 +3,8 @@ export type DashboardResponse = {
     metrics: {
       todayRevenue: number;
       pendingPayments: number;
-      cashInHand: number;
+      cashCollection: number;
+      metricsDayLabel: string;
       lowStockItems: Array<{
         _id: string;
         name: string;
@@ -23,10 +24,12 @@ export type DashboardResponse = {
     traffic: {
       hours: { hour: number; count: number }[];
       peak: { hour: number; count: number };
+      activeHours: { hour: number; count: number }[];
     };
     credit: {
       highestDues: unknown[];
       longestSincePayment: unknown[];
     };
+    latestSaleBillDate: string | null;
   };
 };

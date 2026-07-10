@@ -1,12 +1,7 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
-import { escapeRegex } from "@/lib/string";
-import { Bill } from "@/models/Bill";
-import { Payment } from "@/models/Payment";
-import { LedgerTransaction } from "@/models/Transaction";
-import { Party } from "@/models/Party";
+import { withMongoId } from "@/lib/id-compat";
 import { partyUpdateSchema } from "@/lib/validations";
-import mongoose from "mongoose";
 
 export const runtime = "nodejs";
 
@@ -17,10 +12,9 @@ export async function GET(
   try {
     await connectDb();
     const { id } = await ctx.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) return jsonError("Invalid id", 400);
-    const party = await Party.findById(id).lean();
+    const party = await db.party.findUnique({ where: { id } });
     if (!party) return jsonError("Not found", 404);
-    return jsonOk(party);
+    return jsonOk(withMongoId(party));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);
@@ -34,29 +28,27 @@ export async function PATCH(
   try {
     await connectDb();
     const { id } = await ctx.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) return jsonError("Invalid id", 400);
     const body = await req.json();
     const parsed = partyUpdateSchema.safeParse(body);
     if (!parsed.success) {
       return jsonError(JSON.stringify(parsed.error.flatten()), 422);
     }
-    const party = await Party.findById(id);
+    const party = await db.party.findUnique({ where: { id } });
     if (!party) return jsonError("Not found", 404);
     if (parsed.data.name !== undefined) {
-      const dup = await Party.findOne({
-        _id: { $ne: party._id },
-        name: {
-          $regex: new RegExp(`^${escapeRegex(parsed.data.name.trim())}$`, "i"),
-        },
-        partyType: party.partyType,
-      }).lean();
+      const trimmedName = parsed.data.name.trim();
+      const dup = await db.party.findFirst({
+        where: { id: { not: id }, name: trimmedName, partyType: party.partyType as any },
+      });
       if (dup) {
         return jsonError("A party with this name already exists", 409);
       }
-      party.name = parsed.data.name.trim();
+      const updated = await db.party.update({
+        where: { id },
+        data: { name: trimmedName },
+      });
+      return jsonOk(withMongoId(updated));
     }
-    if (parsed.data.phone !== undefined) party.phone = parsed.data.phone;
-    if (parsed.data.address !== undefined) party.address = parsed.data.address;
     if (parsed.data.openingBalance !== undefined) {
       return jsonError(
         "Opening balance cannot be changed after creation (use adjustments)",
@@ -66,17 +58,21 @@ export async function PATCH(
     if (parsed.data.partyType !== undefined) {
       return jsonError("Party type cannot be changed", 400);
     }
+
+    const data: any = {};
+    if (parsed.data.phone !== undefined) data.phone = parsed.data.phone ?? "";
+    if (parsed.data.address !== undefined) data.address = parsed.data.address ?? "";
     if (parsed.data.maxDaysWithoutPayment !== undefined) {
       if (party.partyType !== "customer") {
-        party.maxDaysWithoutPayment = null;
+        data.maxDaysWithoutPayment = null;
       } else {
         const v = parsed.data.maxDaysWithoutPayment;
-        party.maxDaysWithoutPayment =
-          v === null || v === undefined ? null : v;
+        data.maxDaysWithoutPayment = v === null || v === undefined ? null : v;
       }
     }
-    await party.save();
-    return jsonOk(party.toObject());
+
+    const updated = await db.party.update({ where: { id }, data });
+    return jsonOk(withMongoId(updated));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);
@@ -90,11 +86,10 @@ export async function DELETE(
   try {
     await connectDb();
     const { id } = await ctx.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) return jsonError("Invalid id", 400);
     const [txCount, billCount, paymentCount] = await Promise.all([
-      LedgerTransaction.countDocuments({ partyId: id }),
-      Bill.countDocuments({ partyId: id }),
-      Payment.countDocuments({ partyId: id }),
+      db.ledgerTransaction.count({ where: { partyId: id } }),
+      db.bill.count({ where: { partyId: id } }),
+      db.payment.count({ where: { partyId: id } }),
     ]);
     if (txCount > 0 || billCount > 0 || paymentCount > 0) {
       return jsonError(
@@ -102,8 +97,9 @@ export async function DELETE(
         400
       );
     }
-    const res = await Party.findByIdAndDelete(id);
-    if (!res) return jsonError("Not found", 404);
+    const existing = await db.party.findUnique({ where: { id } });
+    if (!existing) return jsonError("Not found", 404);
+    await db.party.delete({ where: { id } });
     return jsonOk({ ok: true });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";

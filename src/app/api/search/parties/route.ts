@@ -1,6 +1,6 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
-import { Party } from "@/models/Party";
+import { withMongoIds } from "@/lib/id-compat";
 import Fuse from "fuse.js";
 
 export const runtime = "nodejs";
@@ -11,13 +11,14 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const q = (searchParams.get("q") ?? "").trim();
     const type = searchParams.get("type");
-    const filter: Record<string, unknown> = {};
-    if (type === "customer" || type === "supplier") filter.partyType = type;
+    const where: { partyType?: "customer" | "supplier" } = {};
+    if (type === "customer" || type === "supplier") where.partyType = type;
 
-    const parties = await Party.find(filter).sort({ name: 1 }).limit(2000).lean();
-    if (!q) return jsonOk(parties.slice(0, 30));
+    const parties = await db.party.findMany({ where, orderBy: { name: "asc" }, take: 2000 });
+    const docs = withMongoIds(parties);
+    if (!q) return jsonOk(docs.slice(0, 30));
 
-    const fuse = new Fuse(parties, {
+    const fuse = new Fuse(docs, {
       keys: ["name", "phone"],
       threshold: 0.35,
       ignoreLocation: true,

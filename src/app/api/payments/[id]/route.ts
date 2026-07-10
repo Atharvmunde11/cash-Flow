@@ -1,11 +1,9 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
+import { withMongoId } from "@/lib/id-compat";
 import { partyBalanceDelta } from "@/lib/ledger";
 import { jsonError, jsonOk } from "@/lib/http";
 import { paymentCreateSchema } from "@/lib/validations";
-import { Payment } from "@/models/Payment";
-import { Party } from "@/models/Party";
-import { LedgerTransaction } from "@/models/Transaction";
-import mongoose from "mongoose";
+import type { Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
 
@@ -17,34 +15,37 @@ function getLedgerPaymentMode(paymentMode: "cash" | "upi" | "bank") {
   return paymentMode === "bank" ? "upi" : paymentMode;
 }
 
-async function findLedgerRowForPayment(payment: {
-  _id: mongoose.Types.ObjectId;
-  partyId: mongoose.Types.ObjectId;
-  amount: number;
-  date: Date;
-  direction: "received" | "paid";
-}) {
-  return LedgerTransaction.findOne({
-    $or: [
-      { paymentId: payment._id },
-      {
-        partyId: payment.partyId,
-        refType: "manual",
-        entryType: getEntryType(payment.direction),
-        amount: payment.amount,
-        date: payment.date,
-      },
-    ],
-  }).sort({ createdAt: -1 });
+function mapPaymentRow(
+  row: Prisma.PaymentGetPayload<{
+    include: { party: true; bankAccount: true };
+  }>,
+) {
+  return {
+    ...withMongoId(row),
+    partyId: row.party
+      ? {
+          _id: row.party.id,
+          name: row.party.name,
+          partyType: row.party.partyType,
+        }
+      : row.partyId,
+    bankAccountId: row.bankAccount
+      ? {
+          _id: row.bankAccount.id,
+          accountName: row.bankAccount.accountName,
+          bankName: row.bankAccount.bankName,
+        }
+      : null,
+  };
 }
 
-async function recomputePartyBalance(partyId: mongoose.Types.ObjectId | string) {
-  const party = await Party.findById(partyId);
+async function recomputePartyBalance(partyId: string) {
+  const party = await db.party.findUnique({ where: { id: partyId } });
   if (!party) return;
 
-  const rows = await LedgerTransaction.find({ partyId: party._id }).sort({
-    date: 1,
-    createdAt: 1,
+  const rows = await db.ledgerTransaction.findMany({
+    where: { partyId },
+    orderBy: [{ date: "asc" }, { createdAt: "asc" }],
   });
 
   let balance = 0;
@@ -56,8 +57,10 @@ async function recomputePartyBalance(partyId: mongoose.Types.ObjectId | string) 
       row.entryType as "credit" | "debit",
       row.amount,
     );
-    row.balanceAfterParty = balance;
-    await row.save();
+    await db.ledgerTransaction.update({
+      where: { id: row.id },
+      data: { balanceAfterParty: balance },
+    });
 
     if (
       party.partyType === "customer" &&
@@ -68,11 +71,37 @@ async function recomputePartyBalance(partyId: mongoose.Types.ObjectId | string) 
     }
   }
 
-  party.balance = balance;
-  if (party.partyType === "customer") {
-    party.lastPaymentAt = lastPaymentAt;
-  }
-  await party.save();
+  await db.party.update({
+    where: { id: partyId },
+    data: {
+      balance,
+      lastPaymentAt: party.partyType === "customer" ? lastPaymentAt : null,
+    },
+  });
+}
+
+async function findLedgerRowForPayment(payment: {
+  id: string;
+  partyId: string;
+  amount: number;
+  date: Date;
+  direction: "received" | "paid";
+}) {
+  return db.ledgerTransaction.findFirst({
+    where: {
+      OR: [
+        { paymentId: payment.id },
+        {
+          partyId: payment.partyId,
+          refType: "manual",
+          entryType: getEntryType(payment.direction),
+          amount: payment.amount,
+          date: payment.date,
+        },
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+  });
 }
 
 export async function GET(
@@ -82,13 +111,12 @@ export async function GET(
   try {
     await connectDb();
     const { id } = await ctx.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) return jsonError("Invalid id", 400);
-    const row = await Payment.findById(id)
-      .populate("partyId", "name partyType")
-      .populate("bankAccountId", "accountName bankName")
-      .lean();
+    const row = await db.payment.findUnique({
+      where: { id },
+      include: { party: true, bankAccount: true },
+    });
     if (!row) return jsonError("Not found", 404);
-    return jsonOk(row);
+    return jsonOk(mapPaymentRow(row));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);
@@ -102,84 +130,93 @@ export async function PATCH(
   try {
     await connectDb();
     const { id } = await ctx.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) return jsonError("Invalid id", 400);
 
     const body = await req.json();
     const parsed = paymentCreateSchema.partial().safeParse(body);
-    if (!parsed.success) return jsonError(JSON.stringify(parsed.error.flatten()), 422);
+    if (!parsed.success)
+      return jsonError(JSON.stringify(parsed.error.flatten()), 422);
 
-    const row = await Payment.findById(id);
+    const row = await db.payment.findUnique({ where: { id } });
     if (!row) return jsonError("Not found", 404);
 
     const originalPartyId = row.partyId;
-    const nextPartyId =
-      parsed.data.partyId && mongoose.Types.ObjectId.isValid(parsed.data.partyId)
-        ? new mongoose.Types.ObjectId(parsed.data.partyId)
-        : row.partyId;
-    const nextParty = await Party.findById(nextPartyId);
+    const nextPartyId = parsed.data.partyId ?? row.partyId;
+    const nextParty = await db.party.findUnique({ where: { id: nextPartyId } });
     if (!nextParty) return jsonError("Party not found", 404);
 
     const nextAmount = parsed.data.amount ?? row.amount;
     const nextDate = parsed.data.date ?? row.date;
-    const nextDirection = parsed.data.direction ?? row.direction;
+    const nextDirection = (parsed.data.direction ?? row.direction) as
+      | "received"
+      | "paid";
     const nextPaymentMode = parsed.data.paymentMode ?? row.paymentMode;
     const nextNotes = parsed.data.notes ?? row.notes ?? "";
 
     const ledgerRow = await findLedgerRowForPayment({
-      _id: row._id,
-      partyId: row.partyId as mongoose.Types.ObjectId,
+      id: row.id,
+      partyId: row.partyId,
       amount: row.amount,
       date: row.date,
-      direction: row.direction,
+      direction: row.direction as "received" | "paid",
     });
 
-    row.partyId = nextParty._id;
-    row.amount = nextAmount;
-    row.paymentMode = nextPaymentMode;
-    row.date = nextDate;
-    row.notes = nextNotes;
-    row.direction = nextDirection;
-
-    if (Object.prototype.hasOwnProperty.call(body, "bankAccountId")) {
-      row.bankAccountId =
-        parsed.data.bankAccountId && mongoose.Types.ObjectId.isValid(parsed.data.bankAccountId)
-          ? new mongoose.Types.ObjectId(parsed.data.bankAccountId)
-          : null;
-    }
-
-    await row.save();
+    const updated = await db.payment.update({
+      where: { id },
+      data: {
+        partyId: nextParty.id,
+        amount: nextAmount,
+        paymentMode: nextPaymentMode,
+        date: nextDate,
+        notes: nextNotes,
+        direction: nextDirection,
+        ...(Object.prototype.hasOwnProperty.call(body, "bankAccountId")
+          ? { bankAccountId: parsed.data.bankAccountId ?? null }
+          : {}),
+      },
+      include: { party: true, bankAccount: true },
+    });
 
     if (ledgerRow) {
-      ledgerRow.partyId = nextParty._id;
-      ledgerRow.partyType = nextParty.partyType;
-      ledgerRow.entryType = getEntryType(nextDirection);
-      ledgerRow.amount = nextAmount;
-      ledgerRow.paymentMode = getLedgerPaymentMode(nextPaymentMode);
-      ledgerRow.date = nextDate;
-      ledgerRow.notes = nextNotes || `Payment (${nextDirection})`;
-      ledgerRow.refType = "manual";
-      ledgerRow.paymentId = row._id;
-      await ledgerRow.save();
+      await db.ledgerTransaction.update({
+        where: { id: ledgerRow.id },
+        data: {
+          partyId: nextParty.id,
+          partyType: nextParty.partyType,
+          entryType: getEntryType(nextDirection),
+          amount: nextAmount,
+          paymentMode: getLedgerPaymentMode(
+            nextPaymentMode as "cash" | "upi" | "bank",
+          ),
+          date: nextDate,
+          notes: nextNotes || `Payment (${nextDirection})`,
+          refType: "manual",
+          paymentId: row.id,
+        },
+      });
     } else {
-      await LedgerTransaction.create({
-        partyId: nextParty._id,
-        partyType: nextParty.partyType,
-        entryType: getEntryType(nextDirection),
-        amount: nextAmount,
-        paymentMode: getLedgerPaymentMode(nextPaymentMode),
-        date: nextDate,
-        notes: nextNotes || `Payment (${nextDirection})`,
-        refType: "manual",
-        paymentId: row._id,
+      await db.ledgerTransaction.create({
+        data: {
+          partyId: nextParty.id,
+          partyType: nextParty.partyType,
+          entryType: getEntryType(nextDirection),
+          amount: nextAmount,
+          paymentMode: getLedgerPaymentMode(
+            nextPaymentMode as "cash" | "upi" | "bank",
+          ),
+          date: nextDate,
+          notes: nextNotes || `Payment (${nextDirection})`,
+          refType: "manual",
+          paymentId: row.id,
+        },
       });
     }
 
     await recomputePartyBalance(originalPartyId);
-    if (!originalPartyId.equals(nextParty._id)) {
-      await recomputePartyBalance(nextParty._id);
+    if (originalPartyId !== nextParty.id) {
+      await recomputePartyBalance(nextParty.id);
     }
 
-    return jsonOk(row.toObject());
+    return jsonOk(mapPaymentRow(updated));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);
@@ -193,25 +230,24 @@ export async function DELETE(
   try {
     await connectDb();
     const { id } = await ctx.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) return jsonError("Invalid id", 400);
 
-    const row = await Payment.findById(id);
+    const row = await db.payment.findUnique({ where: { id } });
     if (!row) return jsonError("Not found", 404);
 
     const ledgerRow = await findLedgerRowForPayment({
-      _id: row._id,
-      partyId: row.partyId as mongoose.Types.ObjectId,
+      id: row.id,
+      partyId: row.partyId,
       amount: row.amount,
       date: row.date,
-      direction: row.direction,
+      direction: row.direction as "received" | "paid",
     });
 
     if (ledgerRow) {
-      await LedgerTransaction.findByIdAndDelete(ledgerRow._id);
+      await db.ledgerTransaction.delete({ where: { id: ledgerRow.id } });
     }
 
-    await Payment.findByIdAndDelete(id);
-    await recomputePartyBalance(row.partyId as mongoose.Types.ObjectId);
+    await db.payment.delete({ where: { id } });
+    await recomputePartyBalance(row.partyId);
 
     return jsonOk({ ok: true });
   } catch (e) {

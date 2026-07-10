@@ -1,6 +1,6 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
-import { Item } from "@/models/Item";
+import { withMongoIds } from "@/lib/id-compat";
 import Fuse from "fuse.js";
 
 export const runtime = "nodejs";
@@ -10,10 +10,11 @@ export async function GET(req: Request) {
     await connectDb();
     const { searchParams } = new URL(req.url);
     const q = (searchParams.get("q") ?? "").trim();
-    const items = await Item.find({}).sort({ name: 1 }).limit(5000).lean();
-    if (!q) return jsonOk(items.slice(0, 30));
+    const items = await db.item.findMany({ orderBy: { name: "asc" }, take: 5000 });
+    const docs = withMongoIds(items);
+    if (!q) return jsonOk(docs.slice(0, 30));
 
-    const fuse = new Fuse(items, {
+    const fuse = new Fuse(docs, {
       keys: ["name"],
       threshold: 0.35,
       ignoreLocation: true,

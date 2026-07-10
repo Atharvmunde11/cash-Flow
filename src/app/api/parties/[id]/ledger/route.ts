@@ -1,10 +1,6 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
-import { Bill } from "@/models/Bill";
-import { Payment } from "@/models/Payment";
-import { LedgerTransaction } from "@/models/Transaction";
-import { Party } from "@/models/Party";
-import mongoose from "mongoose";
+import { withMongoId, withMongoIds } from "@/lib/id-compat";
 
 export const runtime = "nodejs";
 
@@ -15,54 +11,40 @@ export async function GET(
   try {
     await connectDb();
     const { id } = await ctx.params;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return jsonError("Invalid id", 400);
-    const party = await Party.findById(id).lean();
+    const party = await db.party.findUnique({ where: { id } });
     if (!party) return jsonError("Not found", 404);
 
     const [transactions, bills, payments] = await Promise.all([
-      LedgerTransaction.find({ partyId: id }).sort({ date: -1 }).lean(),
-      Bill.find({ partyId: id })
-        .sort({ billDate: -1 })
-        .select(
-          "billNumber billKind billDate total paidAmount creditAmount paymentMode createdAt lines",
-        )
-        .lean(),
-      Payment.find({ partyId: id })
-        .sort({ date: -1 })
-        .select(
-          "amount paymentMode bankAccountId date notes direction createdAt updatedAt",
-        )
-        .lean(),
+      db.ledgerTransaction.findMany({
+        where: { partyId: id },
+        orderBy: { date: "desc" },
+      }),
+      db.bill.findMany({
+        where: { partyId: id },
+        orderBy: { billDate: "desc" },
+        include: { lines: true },
+      }),
+      db.payment.findMany({
+        where: { partyId: id },
+        orderBy: { date: "desc" },
+      }),
     ]);
 
     // Compute profit per bill
     const billsWithProfit = bills.map((b) => {
-      const profit = b.lines.reduce(
-        (
-          sum: number,
-          line: {
-            purchasePrice?: number;
-            unitPrice: number;
-            quantity: number;
-          },
-        ) => {
-          const pp = line.purchasePrice ?? 0;
-        if (b.billKind === "sale") {
-            return sum + (line.unitPrice - pp) * line.quantity;
-          }
-          return sum;
-        },
-        0,
-      );
-      return { ...b, profit };
+      const profit = (b.lines ?? []).reduce((sum: number, line: any) => {
+        const pp = line.purchasePrice ?? 0;
+        if (b.billKind === "sale") return sum + (line.unitPrice - pp) * line.quantity;
+        return sum;
+      }, 0);
+      return { ...b, profit } as any;
     });
 
     return jsonOk({
-      party,
-      transactions,
-      bills: billsWithProfit,
-      payments,
+      party: withMongoId(party),
+      transactions: withMongoIds(transactions),
+      bills: withMongoIds(billsWithProfit as any),
+      payments: withMongoIds(payments),
       activitySummary: {
         ledgerEntries: transactions.length,
         bills: bills.length,

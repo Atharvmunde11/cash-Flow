@@ -1,9 +1,7 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
-import { escapeRegex } from "@/lib/string";
-import { Item } from "@/models/Item";
+import { withMongoId, withMongoIds } from "@/lib/id-compat";
 import { itemCreateSchema } from "@/lib/validations";
-import mongoose from "mongoose";
 
 export const runtime = "nodejs";
 
@@ -13,15 +11,16 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const categoryId = searchParams.get("categoryId");
     const q = searchParams.get("q");
-    const filter: Record<string, unknown> = {};
-    if (categoryId && mongoose.Types.ObjectId.isValid(categoryId)) {
-      filter.categoryId = categoryId;
-    }
-    if (q && q.trim()) {
-      filter.name = { $regex: new RegExp(escapeRegex(q.trim()), "i") };
-    }
-    const items = await Item.find(filter).sort({ name: 1 }).lean();
-    return jsonOk(items);
+    const where: {
+      categoryId?: string;
+      name?: { contains: string };
+    } = {};
+
+    if (categoryId && categoryId.trim()) where.categoryId = categoryId.trim();
+    if (q && q.trim()) where.name = { contains: q.trim() };
+
+    const items = await db.item.findMany({ where, orderBy: { name: "asc" } });
+    return jsonOk(withMongoIds(items));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);
@@ -36,14 +35,18 @@ export async function POST(req: Request) {
     if (!parsed.success) {
       return jsonError(JSON.stringify(parsed.error.flatten()), 422);
     }
-    const dup = await Item.findOne({
-      name: { $regex: new RegExp(`^${escapeRegex(parsed.data.name.trim())}$`, "i") },
-    }).lean();
+    const name = parsed.data.name.trim();
+    const dup = await db.item.findFirst({ where: { name } });
     if (dup) {
       return jsonError("An item with this name already exists", 409);
     }
-    const item = await Item.create(parsed.data);
-    return jsonOk(item.toObject());
+    const item = await db.item.create({
+      data: {
+        ...parsed.data,
+        name,
+      },
+    });
+    return jsonOk(withMongoId(item));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);

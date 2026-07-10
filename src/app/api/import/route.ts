@@ -1,104 +1,123 @@
 import { connectDb } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
-import { Party } from "@/models/Party";
-import { Category } from "@/models/Category";
-import { Item } from "@/models/Item";
-import { LedgerTransaction } from "@/models/Transaction";
-import { Bill } from "@/models/Bill";
-import mongoose from "mongoose";
+import { decodeImportBuffer } from "@/lib/import/parse-utils";
+import {
+  busyFileLooksMastersOnly,
+  detectAndParseImportFile,
+  mergeParsedImportData,
+  type ImportResult,
+  type ParsedImportData,
+} from "@/lib/import/parse-import-file";
+import { importParsedData } from "@/lib/services/import-service";
 import { z } from "zod";
 
 export const runtime = "nodejs";
 
-const importSchema = z.object({
-  parties: z.array(z.record(z.string(), z.unknown())).optional(),
-  categories: z.array(z.record(z.string(), z.unknown())).optional(),
-  items: z.array(z.record(z.string(), z.unknown())).optional(),
-  transactions: z.array(z.record(z.string(), z.unknown())).optional(),
-  bills: z.array(z.record(z.string(), z.unknown())).optional(),
-  mode: z.enum(["merge", "replace"]).optional().default("merge"),
+const MAX_BYTES_PER_FILE = 25 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
+const MAX_FILES = 20;
+
+const bodySchema = z.object({
+  mode: z.enum(["merge", "replace"]).default("merge"),
+  source: z.enum(["auto", "tally", "busy"]).default("auto"),
+  includeVouchers: z.coerce.boolean().default(true),
 });
+
+function collectUploadFiles(form: FormData): File[] {
+  const fromPlural = form
+    .getAll("files")
+    .filter((entry): entry is File => entry instanceof File);
+  if (fromPlural.length > 0) return fromPlural;
+
+  const single = form.get("file");
+  if (single instanceof File) return [single];
+  return [];
+}
 
 export async function POST(req: Request) {
   try {
     await connectDb();
-    const body = await req.json();
-    const parsed = importSchema.safeParse(body);
-    if (!parsed.success) {
-      return jsonError(JSON.stringify(parsed.error.flatten()), 422);
+
+    const form = await req.formData();
+    const files = collectUploadFiles(form);
+    const modeRaw = form.get("mode");
+    const sourceRaw = form.get("source");
+    const includeVouchersRaw = form.get("includeVouchers");
+
+    if (files.length === 0) {
+      return jsonError("Choose at least one file to import", 422);
+    }
+    if (files.length > MAX_FILES) {
+      return jsonError(`Too many files (max ${MAX_FILES})`, 413);
     }
 
-    if (parsed.data.mode === "replace") {
-      await Promise.all([
-        Party.deleteMany({}),
-        Category.deleteMany({}),
-        Item.deleteMany({}),
-        LedgerTransaction.deleteMany({}),
-        Bill.deleteMany({}),
-      ]);
+    const parsedBody = bodySchema.safeParse({
+      mode: typeof modeRaw === "string" ? modeRaw : "merge",
+      source: typeof sourceRaw === "string" ? sourceRaw : "auto",
+      includeVouchers:
+        includeVouchersRaw === "false" || includeVouchersRaw === "0"
+          ? false
+          : true,
+    });
+    if (!parsedBody.success) {
+      return jsonError(JSON.stringify(parsedBody.error.flatten()), 422);
     }
 
-    const stripId = (row: Record<string, unknown>) => {
-      const { _id, __v, ...rest } = row;
-      return rest;
+    const sourceHint =
+      parsedBody.data.source === "auto" ? undefined : parsedBody.data.source;
+    const preWarnings: string[] = [];
+    const parsedChunks: ParsedImportData[] = [];
+    let totalBytes = 0;
+
+    for (const file of files) {
+      totalBytes += file.size;
+      if (totalBytes > MAX_TOTAL_BYTES) {
+        return jsonError(`Total upload too large (max ${MAX_TOTAL_BYTES / (1024 * 1024)} MB)`, 413);
+      }
+      if (file.size > MAX_BYTES_PER_FILE) {
+        return jsonError(`${file.name} is too large (max 25 MB per file)`, 413);
+      }
+
+      const buffer = await file.arrayBuffer();
+      const text = decodeImportBuffer(buffer);
+
+      if (busyFileLooksMastersOnly(text)) {
+        preWarnings.push(
+          `${file.name}: BUSY masters export only (no invoice vouchers). Export Transactions (Sale, Purchase, etc.) as a separate .dat file and include it in this import.`,
+        );
+      }
+
+      try {
+        parsedChunks.push(
+          detectAndParseImportFile(file.name, text, sourceHint),
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Could not read file";
+        return jsonError(`${file.name}: ${msg}`, 422);
+      }
+    }
+
+    const data = mergeParsedImportData(parsedChunks);
+    const result = await importParsedData(data, parsedBody.data.mode, {
+      includeVouchers: parsedBody.data.includeVouchers,
+    });
+
+    const merged: ImportResult = {
+      ...result,
+      filesProcessed: files.length,
+      fileNames: files.map((f) => f.name),
+      warnings: [
+        ...(files.length > 1
+          ? [`Merged ${files.length} files: ${files.map((f) => f.name).join(", ")}`]
+          : []),
+        ...preWarnings,
+        ...result.warnings,
+      ],
     };
 
-    let counts = { parties: 0, categories: 0, items: 0, transactions: 0, bills: 0 };
-
-    if (parsed.data.parties?.length) {
-      for (const row of parsed.data.parties) {
-        await Party.create(stripId(row));
-        counts.parties++;
-      }
-    }
-    if (parsed.data.categories?.length) {
-      for (const row of parsed.data.categories) {
-        await Category.create({
-          ...stripId(row),
-          parentId: row.parentId
-            ? new mongoose.Types.ObjectId(String(row.parentId))
-            : null,
-          ancestorIds: Array.isArray(row.ancestorIds)
-            ? (row.ancestorIds as string[]).map((id) => new mongoose.Types.ObjectId(id))
-            : [],
-        });
-        counts.categories++;
-      }
-    }
-    if (parsed.data.items?.length) {
-      for (const row of parsed.data.items) {
-        await Item.create({
-          ...stripId(row),
-          categoryId: new mongoose.Types.ObjectId(String(row.categoryId)),
-        });
-        counts.items++;
-      }
-    }
-    if (parsed.data.transactions?.length) {
-      for (const row of parsed.data.transactions) {
-        await LedgerTransaction.create({
-          ...stripId(row),
-          partyId: new mongoose.Types.ObjectId(String(row.partyId)),
-          billId: row.billId
-            ? new mongoose.Types.ObjectId(String(row.billId))
-            : null,
-        });
-        counts.transactions++;
-      }
-    }
-    if (parsed.data.bills?.length) {
-      for (const row of parsed.data.bills) {
-        await Bill.create({
-          ...stripId(row),
-          partyId: new mongoose.Types.ObjectId(String(row.partyId)),
-        });
-        counts.bills++;
-      }
-    }
-
-    return jsonOk({ counts });
+    return jsonOk(merged);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Failed";
-    return jsonError(msg, 400);
+    const msg = e instanceof Error ? e.message : "Import failed";
+    return jsonError(msg, 500);
   }
 }

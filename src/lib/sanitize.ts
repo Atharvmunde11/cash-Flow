@@ -1,17 +1,19 @@
+/**
+ * Strip HTML for safe plain-text display. React escapes text nodes; this removes
+ * markup so notes/descriptions never render as HTML if a caller changes later.
+ */
 export function sanitizeHtml(value: string): string {
   if (typeof value !== "string") return "";
+  return value.replace(/<[^>]*>/g, "").replace(/\0/g, "").trim();
+}
 
-  // Remove <script>...</script> blocks
-  let sanitized = value.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "");
-
-  // Remove inline event handlers (onClick, onmouseover etc.)
-  sanitized = sanitized.replace(/on\w+\s*=\s*(['"]).*?\1/gi, "");
-
-  // Remove javascript: URIs for safety inside href/src attributes
-  sanitized = sanitized.replace(
-    /(href|src)\s*=\s*(['"])\s*javascript:[^'"]*\2/gi,
-    "$1=$2#$2",
-  );
-
-  return sanitized;
+/** Escape for plain text (defense in depth). */
+export function escapeHtml(value: string): string {
+  if (typeof value !== "string") return "";
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }

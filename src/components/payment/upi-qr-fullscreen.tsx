@@ -19,9 +19,17 @@ type Props = {
   open: boolean;
   onClose: () => void;
   amount: number;
+  upiId?: string;
+  payeeName?: string;
 };
 
-export function UpiQrFullscreen({ open, onClose, amount }: Props) {
+export function UpiQrFullscreen({
+  open,
+  onClose,
+  amount,
+  upiId = "",
+  payeeName = "CashFlow",
+}: Props) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -33,9 +41,8 @@ export function UpiQrFullscreen({ open, onClose, amount }: Props) {
 
   if (!open) return null;
 
-  const pa = process.env.NEXT_PUBLIC_UPI_ID ?? "";
-  const pn = process.env.NEXT_PUBLIC_UPI_PAYEE_NAME ?? "Merchant";
-  const uri = pa ? buildUpiUri(pa, pn, Math.max(0, amount)) : "";
+  const pa = upiId.trim();
+  const uri = pa ? buildUpiUri(pa, payeeName, Math.max(0, amount)) : "";
 
   return (
     <div
@@ -57,16 +64,8 @@ export function UpiQrFullscreen({ open, onClose, amount }: Props) {
       </div>
       {!pa ? (
         <p className="max-w-sm text-center text-sm text-muted-foreground">
-          Add{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">
-            NEXT_PUBLIC_UPI_ID
-          </code>{" "}
-          (and optionally{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">
-            NEXT_PUBLIC_UPI_PAYEE_NAME
-          </code>
-          ) to your <code className="text-xs">.env</code> file, then restart the
-          dev server.
+          Add a UPI ID on your bank account in{" "}
+          <strong>Bank Accounts</strong>, then select that account on the bill.
         </p>
       ) : (
         <>
@@ -81,7 +80,7 @@ export function UpiQrFullscreen({ open, onClose, amount }: Props) {
                 currency: "INR",
               })}
             </p>
-            <p className="mt-1 font-mono text-xs text-muted-foreground">{pa}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{payeeName}</p>
           </div>
         </>
       )}

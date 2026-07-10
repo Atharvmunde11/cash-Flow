@@ -1,57 +1,65 @@
-import mongoose from "mongoose";
+import { PrismaClient } from "@prisma/client";
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { resolveSqliteFilePath } from "@/lib/sqlite-path";
 
-const MONGODB_URI =
-  process.env.MONGODB_URI ??
-  process.env.MONGO_URL ??
-  process.env.MONGO_URI;
-
-interface MongooseCache {
-  conn: typeof mongoose | null;
-  promise: Promise<typeof mongoose> | null;
-}
+type PrismaCache = {
+  client: PrismaClient | null;
+  connectPromise: Promise<void> | null;
+};
 
 declare global {
-  var mongooseCache: MongooseCache | undefined;
+  // eslint-disable-next-line no-var
+  var prismaCache: PrismaCache | undefined;
 }
 
-const cache: MongooseCache = global.mongooseCache ?? {
-  conn: null,
-  promise: null,
+const cache: PrismaCache = global.prismaCache ?? {
+  client: null,
+  connectPromise: null,
 };
 
 if (process.env.NODE_ENV !== "production") {
-  global.mongooseCache = cache;
+  global.prismaCache = cache;
 }
 
-export async function connectDb(): Promise<typeof mongoose> {
-  if (!MONGODB_URI) {
-    throw new Error(
-      "Set MONGODB_URI, MONGO_URL, or MONGO_URI in .env.local (e.g. mongodb://127.0.0.1:27017/accounting)"
-    );
+function getClient(): PrismaClient {
+  if (!cache.client) {
+    const sqlitePath = resolveSqliteFilePath();
+    const adapter = new PrismaBetterSqlite3({ url: sqlitePath });
+    cache.client = new PrismaClient({ adapter });
   }
-  if (cache.conn) return cache.conn;
-  if (!cache.promise) {
-    const opts: mongoose.ConnectOptions = {
-      bufferCommands: false,
-      serverSelectionTimeoutMS: 5000,
-    };
-    // Standalone mongod (not replica set / Atlas cluster): connect directly to the host in the URI.
-    const isDirect =
-      MONGODB_URI.startsWith("mongodb://") &&
-      !/replicaSet=/i.test(MONGODB_URI) &&
-      !MONGODB_URI.includes("mongodb+srv://");
-    if (isDirect) {
-      opts.directConnection = true;
+  return cache.client;
+}
+
+/**
+ * Lazy proxy: do not construct Prisma at module load time. If initialization
+ * throws (bad DATABASE_URL, native module load), a top-level failure would
+ * bypass route try/catch and yield Next's generic "Internal Server Error".
+ */
+export const db = new Proxy({} as PrismaClient, {
+  get(_target, prop, receiver) {
+    const client = getClient();
+    const value = Reflect.get(client, prop, receiver) as unknown;
+    if (typeof value === "function") {
+      return (value as (...args: unknown[]) => unknown).bind(client);
     }
-    cache.promise = mongoose.connect(MONGODB_URI, opts).catch((error) => {
-      cache.promise = null;
-      const message =
-        error instanceof Error ? error.message : "Unknown MongoDB error";
-      throw new Error(
-        `Failed to connect to MongoDB at ${MONGODB_URI}. ${message}`
-      );
+    return value;
+  },
+  has(_target, prop) {
+    return Reflect.has(getClient(), prop);
+  },
+});
+
+/**
+ * Compatibility shim (many routes currently call connectDb()).
+ * Prisma lazily connects, but we eagerly validate env and connect once.
+ */
+export async function connectDb(): Promise<void> {
+  if (!cache.connectPromise) {
+    cache.connectPromise = db.$connect().catch((error) => {
+      cache.connectPromise = null;
+      const message = error instanceof Error ? error.message : "Unknown DB error";
+      throw new Error(`Failed to connect to SQLite via Prisma. ${message}`);
     });
   }
-  cache.conn = await cache.promise;
-  return cache.conn;
+  await cache.connectPromise;
 }

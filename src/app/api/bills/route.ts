@@ -1,10 +1,8 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
+import { withMongoIds } from "@/lib/id-compat";
 import { billCreateSchema } from "@/lib/validations";
 import { createBillWithSideEffects } from "@/lib/services/bill-service";
-import { Bill } from "@/models/Bill";
-import { Item } from "@/models/Item";
-import mongoose from "mongoose";
 
 export const runtime = "nodejs";
 
@@ -17,18 +15,14 @@ export async function GET(req: Request) {
     const today = searchParams.get("today");
     const from = searchParams.get("from");
     const to = searchParams.get("to");
-    const filter: Record<string, unknown> = {};
+    const where: any = {};
 
-    if (partyId && mongoose.Types.ObjectId.isValid(partyId)) {
-      filter.partyId = partyId;
-    }
-    if (itemId && mongoose.Types.ObjectId.isValid(itemId)) {
-      filter["lines.itemId"] = new mongoose.Types.ObjectId(itemId);
-    }
+    if (partyId && partyId.trim()) where.partyId = partyId.trim();
+    if (itemId && itemId.trim()) where.lines = { some: { itemId: itemId.trim() } };
 
     const kind = searchParams.get("billKind");
     if (kind === "sale" || kind === "purchase") {
-      filter.billKind = kind;
+      where.billKind = kind;
     }
 
     if (today === "1") {
@@ -36,50 +30,46 @@ export async function GET(req: Request) {
       start.setHours(0, 0, 0, 0);
       const end = new Date(start);
       end.setDate(end.getDate() + 1);
-      filter.billDate = { $gte: start, $lt: end };
+      where.billDate = { gte: start, lt: end };
     }
 
     if (from && to) {
       const f = new Date(from);
       const t = new Date(to);
-      filter.billDate = { $gte: f, $lte: t };
+      where.billDate = { gte: f, lte: t };
     }
 
     const date = searchParams.get("date");
     if (date && !today && !from) {
-      const d = new Date(`${date}T00:00:00`);
-      const end = new Date(d);
-      end.setDate(end.getDate() + 1);
-      filter.billDate = { $gte: d, $lt: end };
+      const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (match) {
+        const y = Number(match[1]);
+        const m = Number(match[2]) - 1;
+        const d = Number(match[3]);
+        const start = new Date(y, m, d, 0, 0, 0, 0);
+        const end = new Date(y, m, d + 1, 0, 0, 0, 0);
+        where.billDate = { gte: start, lt: end };
+      }
     }
 
-    const rows = await Bill.find(filter)
-      .sort({ createdAt: -1 })
-      .limit(200)
-      .lean();
-
-    // Compute profit per bill
-    const rowsWithProfit = rows.map((b) => {
-      const profit = b.lines.reduce(
-        (
-          s: number,
-          l: {
-            quantity: number;
-            unitPrice: number;
-            purchasePrice?: number;
-          },
-        ) => {
-        const pp =
-          l.purchasePrice ?? 0;
-        if (b.billKind === "sale") {
-          return s + (l.unitPrice - pp) * l.quantity;
-        } else {
-          // purchase: cost is what we paid, no selling price
-          return s;
-        }
+    const rows = await db.bill.findMany({
+      where,
+      orderBy: { billDate: "desc" },
+      take: 500,
+      include: {
+        lines: true,
+        sundryCharges: true,
+        stockWarnings: true,
       },
-        0,
-      );
+    });
+
+    // Compute profit per bill (best-effort; older bills may not have purchasePrice stored)
+    const rowsWithProfit = withMongoIds(rows).map((b) => {
+      const profit = b.lines.reduce((s: number, l: any) => {
+        const pp = (l.purchasePrice ?? 0) > 0 ? (l.purchasePrice ?? 0) : 0;
+        if (b.billKind === "sale") return s + (l.unitPrice - pp) * l.quantity;
+        return s;
+      }, 0);
       return { ...b, profit };
     });
 
@@ -117,17 +107,12 @@ export async function POST(req: Request) {
       return jsonError("Add at least one item line", 400);
     }
 
-    const { Party } = await import("@/models/Party");
-
     let partyDoc = null;
     let isWalkIn = false;
 
     // partyId is undefined for walk-in customers after zod transform
-    if (
-      parsed.data.partyId &&
-      mongoose.Types.ObjectId.isValid(parsed.data.partyId)
-    ) {
-      partyDoc = await Party.findById(parsed.data.partyId).lean();
+    if (parsed.data.partyId) {
+      partyDoc = await db.party.findUnique({ where: { id: parsed.data.partyId } });
       if (!partyDoc) return jsonError("Party not found", 400);
     } else {
       isWalkIn = true;
@@ -152,7 +137,7 @@ export async function POST(req: Request) {
     // Compute items total
     let total = 0;
     for (const line of parsed.data.lines) {
-      const item = await Item.findById(line.itemId).lean();
+      const item = await db.item.findUnique({ where: { id: line.itemId } });
       if (!item) return jsonError(`Item not found: ${line.itemId}`, 400);
       const unitPrice =
         line.unitPrice !== undefined ? line.unitPrice : item.price;

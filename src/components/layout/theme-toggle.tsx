@@ -28,6 +28,18 @@ export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
   const isClient = useIsClient();
 
+  const persistTheme = async (nextTheme: string) => {
+    try {
+      await fetch("/api/settings/app", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ theme: nextTheme }),
+      });
+    } catch {
+      // ignore (theme still persists in localStorage via next-themes)
+    }
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -51,7 +63,10 @@ export function ThemeToggle() {
             <DropdownMenuCheckboxItem
               key={t.value}
               checked={theme === t.value}
-              onCheckedChange={() => setTheme(t.value)}
+              onCheckedChange={() => {
+                setTheme(t.value);
+                void persistTheme(t.value);
+              }}
             >
               <span className="flex items-center gap-2">
                 {theme === t.value && <Check className="size-4" />}
@@ -69,7 +84,10 @@ export function ThemeToggle() {
             <DropdownMenuCheckboxItem
               key={t.value}
               checked={theme === t.value}
-              onCheckedChange={() => setTheme(t.value)}
+              onCheckedChange={() => {
+                setTheme(t.value);
+                void persistTheme(t.value);
+              }}
             >
               <span className="flex items-center gap-2">
                 {theme === t.value && <Check className="size-4" />}

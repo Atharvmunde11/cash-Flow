@@ -39,6 +39,11 @@ export function ItemCombobox(props: {
   onChange: (id: string, item?: Item) => void;
   placeholder?: string;
   disabled?: boolean;
+  hideChevron?: boolean;
+  /** Preloaded catalog (e.g. billing page) so selected item shows when editing. */
+  catalog?: Item[];
+  triggerProps?: React.ComponentPropsWithoutRef<"button"> &
+    Partial<Record<`data-${string}`, string>>;
 }) {
   const [open, setOpen] = React.useState(false);
   const [q, setQ] = React.useState("");
@@ -49,7 +54,9 @@ export function ItemCombobox(props: {
     enabled: open,
   });
 
-  const selected = query.data?.find((i) => i._id === props.value);
+  const selected =
+    query.data?.find((i) => i._id === props.value) ??
+    props.catalog?.find((i) => i._id === props.value);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -57,15 +64,29 @@ export function ItemCombobox(props: {
         type="button"
         disabled={props.disabled}
         aria-expanded={open}
+        onKeyDown={(e) => {
+          props.triggerProps?.onKeyDown?.(e);
+          if (e.key === "Shift") {
+            e.preventDefault();
+            if (!props.disabled) setOpen((v) => !v);
+          }
+        }}
+        {...props.triggerProps}
         className={cn(
-          buttonVariants({ variant: "outline" }),
-          "w-full justify-between font-normal",
+          buttonVariants({ variant: props.hideChevron ? "ghost" : "outline" }),
+          "w-full font-normal",
+          props.hideChevron ? "justify-start" : "justify-between",
+          props.triggerProps?.className,
         )}
       >
-        {selected
-          ? `${selected.name} (${selected.unit})`
-          : (props.placeholder ?? "Select item…")}
-        <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />
+        <span className="truncate">
+          {selected
+            ? `${selected.name} (${selected.unit})`
+            : (props.placeholder ?? "Select item…")}
+        </span>
+        {!props.hideChevron ? (
+          <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />
+        ) : null}
       </PopoverTrigger>
       <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
         <Command shouldFilter={false}>

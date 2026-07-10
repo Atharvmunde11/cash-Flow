@@ -2,6 +2,7 @@
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { AgentChatSidebar } from "@/components/layout/agent-chat-sidebar";
 import { KeyboardShortcuts } from "@/components/layout/keyboard-shortcuts";
+import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -50,17 +51,19 @@ export default function DashboardLayout({
   return (
     <div className="h-screen bg-background flex overflow-hidden">
       {/* Sidebar */}
-      <AppSidebar
-        collapsed={collapsed}
-        setCollapsed={setCollapsed}
-        onSidebarOpen={handleSidebarOpen}
-        onMobileOpen={handleMobileOpen}
-      />
+      <div className="print:hidden">
+        <AppSidebar
+          collapsed={collapsed}
+          setCollapsed={setCollapsed}
+          onSidebarOpen={handleSidebarOpen}
+          onMobileOpen={handleMobileOpen}
+        />
+      </div>
 
       {/* Spacer (VERY IMPORTANT) - matches the fixed sidebar width */}
       <div
         className={cn(
-          "hidden md:block transition-all duration-300 shrink-0",
+          "hidden md:block transition-all duration-300 shrink-0 print:hidden",
           collapsed ? "w-16" : "w-64",
         )}
       />
@@ -85,10 +88,16 @@ export default function DashboardLayout({
       </main>
 
       {/* Agent Chat Sidebar */}
-      <AgentChatSidebar isOpen={chatOpen} setIsOpen={setChatOpen} />
+      <div className="print:hidden">
+        <AgentChatSidebar isOpen={chatOpen} setIsOpen={setChatOpen} />
+      </div>
 
       {/* Global keyboard shortcuts + calculator bottom bar */}
-      <KeyboardShortcuts />
+      <div className="print:hidden">
+        <KeyboardShortcuts />
+      </div>
+
+      <OnboardingFlow />
     </div>
   );
 }

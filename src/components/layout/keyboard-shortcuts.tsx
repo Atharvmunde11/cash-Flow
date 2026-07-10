@@ -13,16 +13,21 @@ const SHORTCUTS: {
   href?: string;
   action?: string;
 }[] = [
-  { key: "d", displayKey: "Ctrl+D", label: "Dashboard", href: "/" },
-  { key: "p", displayKey: "Ctrl+P", label: "Parties", href: "/parties" },
-  { key: "t", displayKey: "Ctrl+T", label: "Bills", href: "/transactions" },
+  { key: "d", displayKey: "Ctrl+D", label: "Home", href: "/" },
+  { key: "b", displayKey: "Ctrl+B", label: "New Invoice", href: "/billing" },
+  { key: "p", displayKey: "Ctrl+P", label: "Customers", href: "/parties" },
   { key: "m", displayKey: "Ctrl+M", label: "Payments", href: "/payments" },
-  { key: "b", displayKey: "Ctrl+B", label: "Billing", href: "/billing" },
-  { key: "e", displayKey: "Ctrl+E", label: "Credit", href: "/credit" },
-  { key: "i", displayKey: "Ctrl+I", label: "Inventory", href: "/inventory" },
+  { key: "i", displayKey: "Ctrl+I", label: "Stock", href: "/inventory" },
+  { key: "h", displayKey: "Ctrl+H", label: "Invoice History", href: "/transactions" },
+  { key: "u", displayKey: "Ctrl+U", label: "Purchase History", href: "/purchases" },
+  { key: "e", displayKey: "Ctrl+E", label: "Money Owed", href: "/credit" },
   { key: "k", displayKey: "Ctrl+K", label: "Categories", href: "/categories" },
-  { key: "l", displayKey: "Ctrl+L", label: "Bank Accounts", href: "/bank-accounts" },
-  { key: "x", displayKey: "Ctrl+X", label: "Data", href: "/data" },
+  {
+    key: "l",
+    displayKey: "Ctrl+L",
+    label: "Bank Accounts",
+    href: "/bank-accounts",
+  },
   { key: ".", displayKey: "Ctrl+.", label: "Calculator", action: "calculator" },
 ];
 
@@ -67,10 +72,10 @@ export function KeyboardShortcuts() {
       {/* Bottom bar */}
       <div className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-between border-t bg-background/95 backdrop-blur px-4 py-1.5 text-xs text-muted-foreground">
         <div className="flex items-center gap-4 overflow-x-auto scrollbar-hide">
-          <span className="shrink-0 font-medium text-foreground/70">
+          {/* <span className="shrink-0 font-medium text-foreground/70">
             Shortcuts:
-          </span>
-          {SHORTCUTS.filter((s) => s.href)
+          </span> */}
+          {/* {SHORTCUTS.filter((s) => s.href)
             .slice(0, 6)
             .map((s) => (
               <span key={s.label} className="shrink-0 flex items-center gap-1">
@@ -85,7 +90,7 @@ export function KeyboardShortcuts() {
               Ctrl+Shift+A
             </kbd>
             Agent
-          </span>
+          </span> */}
         </div>
         <button
           onClick={() => setCalcOpen((o) => !o)}

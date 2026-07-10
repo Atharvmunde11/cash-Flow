@@ -1,8 +1,7 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
-import { escapeRegex } from "@/lib/string";
+import { withMongoId, withMongoIds } from "@/lib/id-compat";
 import { recordOpeningBalanceIfNeeded } from "@/lib/opening-ledger";
-import { Party } from "@/models/Party";
 import { partyCreateSchema } from "@/lib/validations";
 
 export const runtime = "nodejs";
@@ -13,13 +12,15 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const type = searchParams.get("type");
     const q = searchParams.get("q");
-    const filter: Record<string, unknown> = {};
-    if (type === "customer" || type === "supplier") filter.partyType = type;
-    if (q && q.trim()) {
-      filter.name = { $regex: new RegExp(escapeRegex(q.trim()), "i") };
-    }
-    const parties = await Party.find(filter).sort({ name: 1 }).lean();
-    return jsonOk(parties);
+    const where: { partyType?: "customer" | "supplier"; name?: { contains: string } } = {};
+    if (type === "customer" || type === "supplier") where.partyType = type;
+    if (q && q.trim()) where.name = { contains: q.trim() };
+
+    const parties = await db.party.findMany({
+      where,
+      orderBy: { name: "asc" },
+    });
+    return jsonOk(withMongoIds(parties));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed to load parties";
     return jsonError(msg, 500);
@@ -42,34 +43,38 @@ export async function POST(req: Request) {
       partyType,
       maxDaysWithoutPayment,
     } = parsed.data;
-    const dup = await Party.findOne({
-      name: { $regex: new RegExp(`^${escapeRegex(name.trim())}$`, "i") },
-      partyType,
-    }).lean();
+    const trimmedName = name.trim();
+    const dup = await db.party.findFirst({
+      where: { name: trimmedName, partyType },
+    });
     if (dup) {
       return jsonError(
         "A party with this name already exists for this type",
         409,
       );
     }
-    const p = await Party.create({
-      name: name.trim(),
-      phone: phone ?? "",
-      address: address ?? "",
-      openingBalance,
-      // Opening balance is entered as advance (positive means party pre-paid)
-      balance:
-        partyType === "customer" || partyType === "supplier"
-          ? -openingBalance
-          : openingBalance,
-      partyType,
-      maxDaysWithoutPayment:
-        partyType === "customer" && typeof maxDaysWithoutPayment === "number"
-          ? maxDaysWithoutPayment
-          : null,
+    const p = await db.party.create({
+      data: {
+        name: trimmedName,
+        phone: phone ?? "",
+        address: address ?? "",
+        openingBalance,
+        // Opening balance is entered as advance (positive means party pre-paid)
+        balance: -openingBalance,
+        partyType,
+        maxDaysWithoutPayment:
+          partyType === "customer" && typeof maxDaysWithoutPayment === "number"
+            ? maxDaysWithoutPayment
+            : null,
+      },
     });
-    await recordOpeningBalanceIfNeeded(p);
-    return jsonOk(p.toObject());
+    await recordOpeningBalanceIfNeeded({
+      id: p.id,
+      openingBalance: p.openingBalance,
+      partyType: p.partyType as "customer" | "supplier",
+      balance: p.balance,
+    });
+    return jsonOk(withMongoId(p));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed to create party";
     return jsonError(msg, 500);

@@ -62,15 +62,44 @@ const COLORS = [
   "var(--chart-5)",
 ];
 
+function isGradient(value: string | null | undefined) {
+  return Boolean(value && value.includes("gradient("));
+}
+
+function parseLinearGradient(value: string) {
+  const fallback = { angle: 135, start: "#2563eb", end: "#06b6d4" };
+  const match = value.match(
+    /linear-gradient\((\d+)deg,\s*(#[0-9a-fA-F]{3,8}),\s*(#[0-9a-fA-F]{3,8})\)/,
+  );
+  if (!match) return fallback;
+  return { angle: Number(match[1]), start: match[2], end: match[3] };
+}
+
+function gradientId(rawId: string) {
+  // SVG ids must be safe; keep it deterministic.
+  return `cat-grad-${rawId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+}
+
 async function fetchDashboard(weekOffset: number, pieRange: string) {
   const res = await fetch(
     `/api/dashboard?weekOffset=${weekOffset}&pieRange=${encodeURIComponent(pieRange)}`,
+    { cache: "no-store" },
   );
+  const text = await res.text();
   if (!res.ok) {
-    const t = await res.text();
-    throw new Error(t || "Failed to load dashboard");
+    try {
+      const j = JSON.parse(text) as { error?: string };
+      if (typeof j?.error === "string") {
+        throw new Error(j.error);
+      }
+    } catch (e) {
+      if (e instanceof Error && !(e instanceof SyntaxError) && e.message !== text) {
+        throw e;
+      }
+    }
+    throw new Error(text.slice(0, 500) || "Failed to load dashboard");
   }
-  return (await res.json()) as DashboardResponse;
+  return JSON.parse(text) as DashboardResponse;
 }
 
 async function fetchLowStockPage({ pageParam = 1 }: { pageParam?: number }) {
@@ -102,7 +131,10 @@ function formatHour(hour: number): string {
 export function DashboardView() {
   const router = useRouter();
   const [weekOffset, setWeekOffset] = useState(0);
-  const [pieRange, setPieRange] = useState<"today" | "week" | "month">("week");
+  const [weekOffsetInitialized, setWeekOffsetInitialized] = useState(false);
+  const [pieRange, setPieRange] = useState<"today" | "week" | "month" | "all">(
+    "all",
+  );
   const [lowStockOpen, setLowStockOpen] = useState(false);
 
   const query = useQuery({
@@ -123,6 +155,34 @@ export function DashboardView() {
 
   const payload = query.data?.data;
 
+  useEffect(() => {
+    if (!payload || weekOffsetInitialized) return;
+
+    const allZero = payload.revenueWeek.days.every((d) => d.revenue === 0);
+    const latest = payload.latestSaleBillDate;
+    if (allZero && latest) {
+      const latestDay = new Date(latest);
+      latestDay.setHours(0, 0, 0, 0);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const diffDays = Math.round(
+        (today.getTime() - latestDay.getTime()) / 86_400_000,
+      );
+      if (diffDays > 6) {
+        setWeekOffset(-Math.ceil(diffDays / 7));
+      }
+    }
+
+    setWeekOffsetInitialized(true);
+  }, [payload, weekOffsetInitialized]);
+
+  const revenueRangeLabel = useMemo(() => {
+    if (!payload?.revenueWeek.days.length) return "";
+    const first = payload.revenueWeek.days[0]?.label;
+    const last = payload.revenueWeek.days.at(-1)?.label;
+    return first && last ? `${first} – ${last}` : "";
+  }, [payload]);
+
   const pieData = useMemo(() => {
     if (!payload?.categoryPie.rows.length) return [];
     const t = payload.categoryPie.total || 1;
@@ -138,14 +198,16 @@ export function DashboardView() {
   const trafficData = useMemo(() => {
     if (!payload) return [];
     const peakHour = payload.traffic.peak.hour;
-    // Filter to show only business hours (6AM–11PM) for clarity
-    return payload.traffic.hours
-      .filter((h) => h.hour >= 6 && h.hour <= 23)
-      .map((h) => ({
-        ...h,
-        label: formatHour(h.hour),
-        isPeak: h.hour === peakHour,
-      }));
+    const source =
+      payload.traffic.activeHours?.length > 0
+        ? payload.traffic.activeHours
+        : payload.traffic.hours.filter((h) => h.count > 0);
+
+    return source.map((h) => ({
+      ...h,
+      label: formatHour(h.hour),
+      isPeak: h.hour === peakHour,
+    }));
   }, [payload]);
 
   // Lazy loading sentinel
@@ -189,13 +251,19 @@ export function DashboardView() {
         <AlertDescription>
           {query.error instanceof Error
             ? query.error.message
-            : "Check MongoDB connection and MONGODB_URI."}
+            : "Could not load dashboard data."}
         </AlertDescription>
       </Alert>
     );
   }
 
   if (!payload) return null;
+
+  const metricsDay = payload.metrics.metricsDayLabel;
+  const metricsDayHint =
+    metricsDay === "Today"
+      ? "today"
+      : `on ${metricsDay}`;
 
   const allLowStockItems =
     lowStockQuery.data?.pages.flatMap((p) => p.data.items) ?? [];
@@ -233,7 +301,7 @@ export function DashboardView() {
             </div>
           </CardHeader>
           <CardContent className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>Bills + receipts − expenses</span>
+            <span>Sales {metricsDayHint}</span>
             <ChevronRight className="size-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
           </CardContent>
         </Card>
@@ -255,26 +323,26 @@ export function DashboardView() {
             </div>
           </CardHeader>
           <CardContent className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>Today&apos;s unpaid bills</span>
+            <span>Unpaid bills {metricsDayHint}</span>
             <ChevronRight className="size-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
           </CardContent>
         </Card>
 
-        {/* Cash & UPI Position */}
+        {/* Cash collection */}
         <Card>
           <CardHeader className="pb-2 flex flex-row items-start justify-between">
             <div>
-              <CardDescription>Cash &amp; UPI position</CardDescription>
+              <CardDescription>Cash collection</CardDescription>
               <CardTitle className="text-2xl">
-                {formatMoney(payload.metrics.cashInHand)}
+                {formatMoney(payload.metrics.cashCollection)}
               </CardTitle>
             </div>
-            <div className="rounded-lg bg-blue-500/10 p-2 text-blue-600 dark:text-blue-400">
+            <div className="rounded-lg bg-blue-500/10 p-2 text-gray-600 dark:text-gray-400">
               <IndianRupee className="size-5" />
             </div>
           </CardHeader>
           <CardContent className="text-xs text-muted-foreground">
-            Total bills net amount today
+            Cash received {metricsDayHint} (bills + receipts)
           </CardContent>
         </Card>
 
@@ -319,7 +387,9 @@ export function DashboardView() {
               >
                 <ArrowLeft className="size-4" />
               </Button>
-              <Badge variant="secondary">Offset {weekOffset}</Badge>
+              <Badge variant="secondary" className="max-w-40 truncate">
+                {revenueRangeLabel || `Offset ${weekOffset}`}
+              </Badge>
               <Button
                 type="button"
                 variant="outline"
@@ -331,8 +401,8 @@ export function DashboardView() {
               </Button>
             </div>
           </CardHeader>
-          <CardContent className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
+          <CardContent className="h-72 min-w-0">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <LineChart data={payload.revenueWeek.days}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                 <XAxis dataKey="label" tick={{ fontSize: 12 }} />
@@ -357,57 +427,110 @@ export function DashboardView() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
+        <Card className="flex max-h-[28rem] flex-col overflow-hidden">
+          <CardHeader className="shrink-0 space-y-3">
             <CardTitle>Category mix</CardTitle>
             <CardDescription>Top-level category revenue share</CardDescription>
             <Tabs
               value={pieRange}
               onValueChange={(v) =>
-                setPieRange(v as "today" | "week" | "month")
+                setPieRange(v as "today" | "week" | "month" | "all")
               }
             >
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="today">Today</TabsTrigger>
                 <TabsTrigger value="week">Week</TabsTrigger>
                 <TabsTrigger value="month">Month</TabsTrigger>
+                <TabsTrigger value="all">All</TabsTrigger>
               </TabsList>
             </Tabs>
           </CardHeader>
-          <CardContent className="h-72">
-            <ResponsiveContainer width="100%" height="90%">
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius={50}
-                  outerRadius={80}
-                  paddingAngle={2}
-                >
-                  {pieData.map((entry, i) => (
-                    <Cell
-                      key={entry.id}
-                      fill={entry.color || COLORS[i % COLORS.length]}
-                    />
+          <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden pt-0">
+            <div className="h-44 shrink-0 min-w-0">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+                <PieChart>
+                  {/* SVG gradients for category colors */}
+                  <defs>
+                    {pieData
+                      .filter((d) => isGradient(d.color))
+                      .map((d) => {
+                        const g = parseLinearGradient(d.color as string);
+                        const id = gradientId(String(d.id));
+                        return (
+                          <linearGradient
+                            key={id}
+                            id={id}
+                            gradientUnits="userSpaceOnUse"
+                            x1="0"
+                            y1="0"
+                            x2="1"
+                            y2="1"
+                          >
+                            <stop offset="0%" stopColor={g.start} />
+                            <stop offset="100%" stopColor={g.end} />
+                          </linearGradient>
+                        );
+                      })}
+                  </defs>
+                  <Pie
+                    data={pieData}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={42}
+                    outerRadius={68}
+                    paddingAngle={2}
+                  >
+                    {pieData.map((entry, i) => (
+                      <Cell
+                        key={entry.id}
+                        fill={
+                          entry.color
+                            ? isGradient(entry.color)
+                              ? `url(#${gradientId(String(entry.id))})`
+                              : entry.color
+                            : COLORS[i % COLORS.length]
+                        }
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(v) => formatMoney(Number(v))}
+                    contentStyle={{ borderRadius: 8 }}
+                    itemStyle={{
+                      color: "black",
+                    }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+              {pieData.length === 0 ? (
+                <p className="py-4 text-center text-xs text-muted-foreground">
+                  No sales in this period. Try &quot;All&quot; for imported
+                  history.
+                </p>
+              ) : (
+                <div className="space-y-1.5 text-xs text-muted-foreground">
+                  {pieData.map((r, i) => (
+                    <div key={r.id} className="flex items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span
+                          className="size-2.5 shrink-0 rounded-full"
+                          style={{
+                            background: r.color
+                              ? isGradient(r.color)
+                                ? COLORS[i % COLORS.length]
+                                : r.color
+                              : COLORS[i % COLORS.length],
+                          }}
+                        />
+                        <span className="truncate">{r.name}</span>
+                      </span>
+                      <span className="shrink-0 tabular-nums">{r.pct}%</span>
+                    </div>
                   ))}
-                </Pie>
-                <Tooltip
-                  formatter={(v) => formatMoney(Number(v))}
-                  contentStyle={{ borderRadius: 8 }}
-                  itemStyle={{
-                    color: "black",
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-              {pieData.slice(0, 6).map((r) => (
-                <div key={r.name} className="flex justify-between gap-2">
-                  <span className="truncate">{r.name}</span>
-                  <span>{r.pct}%</span>
                 </div>
-              ))}
+              )}
             </div>
           </CardContent>
         </Card>
@@ -417,92 +540,101 @@ export function DashboardView() {
       <div className="grid gap-4 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader>
-            <CardTitle>Billing activity by hour</CardTitle>
+            <CardTitle>Active time</CardTitle>
             <CardDescription>
-              Number of bills generated at each hour of the day (all-time
-              average). The highlighted bar is your busiest hour.
+              When bills and cash receipts happen during the day (all imported
+              history).
             </CardDescription>
           </CardHeader>
-          <CardContent className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={trafficData}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fontSize: 10 }}
-                  interval={0}
-                  angle={-35}
-                  textAnchor="end"
-                  height={50}
-                />
-                <YAxis
-                  allowDecimals={false}
-                  tick={{ fontSize: 11 }}
-                  label={{
-                    value: "Bills",
-                    angle: -90,
-                    position: "insideLeft",
-                    style: { fontSize: 11, fill: "var(--muted-foreground)" },
-                  }}
-                />
-                <Tooltip
-                  formatter={(v) => [`${Number(v)} bills`, "Count"]}
-                  labelFormatter={(label) => `Time: ${label}`}
-                  contentStyle={{ borderRadius: 8 }}
-                  itemStyle={{
-                    color: "black",
-                  }}
-                />
-                <Bar dataKey="count" radius={[4, 4, 0, 0]} name="Bills">
-                  {trafficData.map((entry, index) => (
-                    <Cell
-                      key={`c-${index}`}
-                      fill={
-                        entry.isPeak
-                          ? "var(--primary)"
-                          : "color-mix(in oklch, var(--muted-foreground) 35%, transparent)"
-                      }
-                    />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+          <CardContent className="h-72 min-w-0">
+            {trafficData.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                No billing activity recorded yet.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+                <BarChart data={trafficData}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 11 }}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    tick={{ fontSize: 11 }}
+                    label={{
+                      value: "Activity",
+                      angle: -90,
+                      position: "insideLeft",
+                      style: { fontSize: 11, fill: "var(--muted-foreground)" },
+                    }}
+                  />
+                  <Tooltip
+                    formatter={(v) => [`${Number(v)} entries`, "Count"]}
+                    labelFormatter={(label) => `Time: ${label}`}
+                    contentStyle={{ borderRadius: 8 }}
+                    itemStyle={{
+                      color: "black",
+                    }}
+                  />
+                  <Bar dataKey="count" radius={[4, 4, 0, 0]} name="Activity">
+                    {trafficData.map((entry, index) => (
+                      <Cell
+                        key={`c-${index}`}
+                        fill={
+                          entry.isPeak
+                            ? "hsl(var(--primary))"
+                            : "hsl(var(--muted-foreground) / 0.45)"
+                        }
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Peak hour summary</CardTitle>
-            <CardDescription>
-              Your busiest time based on total bills created
-            </CardDescription>
+            <CardTitle>Peak active time</CardTitle>
+            <CardDescription>Busiest hour from bills and receipts</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-primary/10 p-3">
-                <TrendingUp className="size-6 text-primary" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">
-                  {formatHour(payload.traffic.peak.hour)}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {payload.traffic.peak.count} bills recorded at this hour
-                </p>
-              </div>
-            </div>
-            <div className="rounded-lg border bg-muted/30 p-3 space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                💡 Tip
-              </p>
+            {payload.traffic.peak.count > 0 ? (
+              <>
+                <div className="flex items-center gap-3">
+                  <div className="rounded-lg bg-primary/10 p-3">
+                    <Clock className="size-6 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold">
+                      {formatHour(payload.traffic.peak.hour)}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {payload.traffic.peak.count} entries at this hour
+                    </p>
+                  </div>
+                </div>
+                <div className="rounded-lg border bg-muted/30 p-3 space-y-1.5">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Tip
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Consider having maximum staff around{" "}
+                    <span className="font-medium text-foreground">
+                      {formatHour(payload.traffic.peak.hour)}
+                    </span>{" "}
+                    to handle the rush efficiently.
+                  </p>
+                </div>
+              </>
+            ) : (
               <p className="text-sm text-muted-foreground">
-                Consider having maximum staff &amp; counter availability around{" "}
-                <span className="font-medium text-foreground">
-                  {formatHour(payload.traffic.peak.hour)}
-                </span>{" "}
-                to handle the rush efficiently.
+                No activity data yet. Create bills or record payments to see
+                your busiest hour.
               </p>
-            </div>
+            )}
           </CardContent>
         </Card>
       </div>

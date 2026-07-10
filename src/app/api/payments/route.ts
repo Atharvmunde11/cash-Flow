@@ -1,42 +1,62 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
+import { withMongoId } from "@/lib/id-compat";
 import { jsonError, jsonOk } from "@/lib/http";
-import { paymentCreateSchema } from "@/lib/validations";
-import { Payment } from "@/models/Payment";
-import { Party } from "@/models/Party";
-import { LedgerTransaction } from "@/models/Transaction";
 import { partyBalanceDelta } from "@/lib/ledger";
-import mongoose from "mongoose";
+import { paymentCreateSchema } from "@/lib/validations";
+import type { Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
+
+function mapPaymentRow(
+  row: Prisma.PaymentGetPayload<{
+    include: { party: true; bankAccount: true };
+  }>,
+) {
+  return {
+    ...withMongoId(row),
+    partyId: row.party
+      ? {
+          _id: row.party.id,
+          name: row.party.name,
+          partyType: row.party.partyType,
+        }
+      : row.partyId,
+    bankAccountId: row.bankAccount
+      ? {
+          _id: row.bankAccount.id,
+          accountName: row.bankAccount.accountName,
+          bankName: row.bankAccount.bankName,
+        }
+      : null,
+  };
+}
 
 export async function GET(req: Request) {
   try {
     await connectDb();
     const { searchParams } = new URL(req.url);
-    const partyId = searchParams.get("partyId");
+    const partyId = searchParams.get("partyId")?.trim();
     const today = searchParams.get("today");
-    const filter: Record<string, unknown> = {};
 
-    if (partyId && mongoose.Types.ObjectId.isValid(partyId)) {
-      filter.partyId = partyId;
-    }
+    const where: Prisma.PaymentWhereInput = {};
+    if (partyId) where.partyId = partyId;
 
     if (today === "1") {
       const start = new Date();
       start.setHours(0, 0, 0, 0);
       const end = new Date(start);
       end.setDate(end.getDate() + 1);
-      filter.date = { $gte: start, $lt: end };
+      where.date = { gte: start, lt: end };
     }
 
-    const rows = await Payment.find(filter)
-      .populate("partyId", "name partyType")
-      .populate("bankAccountId", "accountName bankName")
-      .sort({ date: -1 })
-      .limit(500)
-      .lean();
+    const rows = await db.payment.findMany({
+      where,
+      include: { party: true, bankAccount: true },
+      orderBy: { date: "desc" },
+      take: 500,
+    });
 
-    return jsonOk(rows);
+    return jsonOk(rows.map(mapPaymentRow));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);
@@ -48,14 +68,18 @@ export async function POST(req: Request) {
     await connectDb();
     const body = await req.json();
     const parsed = paymentCreateSchema.safeParse(body);
-    if (!parsed.success) return jsonError(JSON.stringify(parsed.error.flatten()), 422);
+    if (!parsed.success)
+      return jsonError(JSON.stringify(parsed.error.flatten()), 422);
 
-    const party = await Party.findById(parsed.data.partyId);
+    const party = await db.party.findUnique({
+      where: { id: parsed.data.partyId },
+    });
     if (!party) return jsonError("Party not found", 404);
 
-    // direction: "received" = customer pays us (credit), "paid" = we pay supplier (debit)
-    const entryType = parsed.data.direction === "received" ? "credit" : "debit";
-    const payMode = parsed.data.paymentMode === "bank" ? "upi" : parsed.data.paymentMode as "cash" | "upi";
+    const entryType =
+      parsed.data.direction === "received" ? "credit" : "debit";
+    const payMode =
+      parsed.data.paymentMode === "bank" ? "upi" : parsed.data.paymentMode;
 
     let balance = party.balance;
     balance += partyBalanceDelta(
@@ -64,36 +88,45 @@ export async function POST(req: Request) {
       parsed.data.amount,
     );
 
-    const payment = await Payment.create({
-      partyId: party._id,
-      amount: parsed.data.amount,
-      paymentMode: parsed.data.paymentMode,
-      bankAccountId: parsed.data.bankAccountId ?? null,
-      date: parsed.data.date,
-      notes: parsed.data.notes ?? "",
-      direction: parsed.data.direction,
+    const payment = await db.payment.create({
+      data: {
+        partyId: party.id,
+        amount: parsed.data.amount,
+        paymentMode: parsed.data.paymentMode,
+        bankAccountId: parsed.data.bankAccountId ?? null,
+        date: parsed.data.date,
+        notes: parsed.data.notes ?? "",
+        direction: parsed.data.direction,
+      },
+      include: { party: true, bankAccount: true },
     });
 
-    await LedgerTransaction.create([{
-      partyId: party._id,
-      partyType: party.partyType,
-      entryType,
-      amount: parsed.data.amount,
-      paymentMode: payMode,
-      date: parsed.data.date,
-      notes: parsed.data.notes || `Payment (${parsed.data.direction})`,
-      refType: "manual",
-      paymentId: payment._id,
-      balanceAfterParty: balance,
-    }]);
+    await db.ledgerTransaction.create({
+      data: {
+        partyId: party.id,
+        partyType: party.partyType,
+        entryType,
+        amount: parsed.data.amount,
+        paymentMode: payMode,
+        date: parsed.data.date,
+        notes: parsed.data.notes || `Payment (${parsed.data.direction})`,
+        refType: "manual",
+        paymentId: payment.id,
+        balanceAfterParty: balance,
+      },
+    });
 
-    party.balance = balance;
-    if (party.partyType === "customer" && entryType === "credit") {
-      party.lastPaymentAt = parsed.data.date;
-    }
-    await party.save();
+    await db.party.update({
+      where: { id: party.id },
+      data: {
+        balance,
+        ...(party.partyType === "customer" && entryType === "credit"
+          ? { lastPaymentAt: parsed.data.date }
+          : {}),
+      },
+    });
 
-    return jsonOk(payment.toObject());
+    return jsonOk(mapPaymentRow(payment));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);

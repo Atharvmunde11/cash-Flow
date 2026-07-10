@@ -3,9 +3,9 @@ import "./globals.css";
 import { Providers } from "@/components/providers";
 
 export const metadata: Metadata = {
-  title: "Ledger Studio — Accounting & Inventory",
+  title: "CashFlow",
   description:
-    "Local-first accounting, billing, inventory, and credit tracking for small businesses.",
+    "Local-first billing, inventory, and credit tracking for small businesses.",
 };
 
 export default function RootLayout({

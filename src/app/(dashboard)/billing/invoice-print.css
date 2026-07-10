@@ -1,0 +1,406 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   invoice-print.css
+   Drop alongside InvoicePrint.tsx in /components/invoice/
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── 1. Hide the invoice on screen; only show during print ─────────────────── */
+
+.invoice-print-wrapper {
+  display: none;
+}
+
+/* ── 2. Print rules ─────────────────────────────────────────────────────────── */
+
+@media print {
+  /* --- Reset page for A4 --- */
+  @page {
+    size: A4 portrait;
+    /* Slightly tighter margins = bigger, clearer invoice */
+    margin: 12mm 12mm 14mm 12mm;
+  }
+
+  /* Dashboard chrome is hidden via `print:hidden` in the dashboard layout. */
+
+  /* IMPORTANT:
+     Don't use `display:none` on ancestors (body/main wrappers), otherwise the
+     invoice can't be re-shown. Use `visibility` instead. */
+  body * {
+    visibility: hidden !important;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Keep normal flow to avoid print clipping */
+  body {
+    display: block !important;
+  }
+
+  /* Reveal only the invoice subtree */
+  #invoice-print-root,
+  #invoice-print-root * {
+    visibility: visible !important;
+  }
+
+  /* Ensure wrapper participates in normal document flow for multipage print */
+  #invoice-print-root.invoice-print-wrapper {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #111 !important;
+    /* Cleaner + sharper in print than Georgia on many printers */
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial,
+      "Noto Sans", "Liberation Sans", sans-serif !important;
+    font-size: 11pt !important;
+    line-height: 1.35 !important;
+    padding: 0 !important;
+    margin: 0 auto !important;
+    box-sizing: border-box !important;
+    box-shadow: none !important;
+    border: none !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Make sure the print content starts at top and stays centered */
+  #invoice-print-root {
+    margin-left: auto !important;
+    margin-right: auto !important;
+    position: static !important;
+    left: auto !important;
+    transform: none !important;
+  }
+
+  /* Prevent orphan rows */
+  .inv-tr {
+    page-break-inside: avoid !important;
+  }
+
+  /* ── Header ──────────────────────────────────────────────────────────────── */
+  .inv-header {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: flex-start !important;
+    gap: 10mm !important;
+    margin-bottom: 4mm !important;
+  }
+
+  .inv-header-left {
+    flex: 1 1 auto !important;
+  }
+
+  .inv-header-right {
+    flex: 0 0 auto !important;
+    text-align: right !important;
+  }
+
+  .inv-company-name {
+    font-size: 18pt !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.01em !important;
+    margin: 0 0 1mm 0 !important;
+    line-height: 1.2 !important;
+  }
+
+  .inv-company-gstin {
+    font-size: 8pt !important;
+    color: #555 !important;
+    margin: 0 0 1mm 0 !important;
+    font-family: "Courier New", monospace !important;
+    letter-spacing: 0.04em !important;
+  }
+
+  .inv-company-addr {
+    font-size: 9pt !important;
+    color: #444 !important;
+    margin: 0 !important;
+    line-height: 1.5 !important;
+  }
+
+  .inv-title {
+    font-size: 20pt !important;
+    font-weight: 800 !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+    margin: 0 0 3mm 0 !important;
+    line-height: 1 !important;
+  }
+
+  /* ── Meta table (Invoice #, Date, etc.) ─────────────────────────────────── */
+  .inv-meta-table {
+    border-collapse: collapse !important;
+    margin-left: auto !important;
+  }
+
+  .inv-meta-table td {
+    padding: 0.5mm 0 0.5mm 6mm !important;
+    font-size: 9pt !important;
+    vertical-align: top !important;
+    line-height: 1.6 !important;
+  }
+
+  .inv-meta-key {
+    color: #555 !important;
+    white-space: nowrap !important;
+  }
+
+  .inv-meta-val {
+    font-weight: 600 !important;
+    text-align: right !important;
+    white-space: nowrap !important;
+  }
+
+  .inv-meta-capitalize {
+    text-transform: capitalize !important;
+  }
+
+  /* ── Divider ─────────────────────────────────────────────────────────────── */
+  .inv-divider {
+    border: none !important;
+    border-top: 1.5pt solid #111 !important;
+    margin: 0 0 4mm 0 !important;
+  }
+
+  /* ── Party blocks ────────────────────────────────────────────────────────── */
+  .inv-parties {
+    display: flex !important;
+    gap: 10mm !important;
+    margin-bottom: 5mm !important;
+  }
+
+  .inv-party-block {
+    flex: 1 !important;
+  }
+
+  .inv-party-label {
+    font-size: 8pt !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.07em !important;
+    color: #333 !important;
+    margin: 0 0 1.5mm 0 !important;
+    border-bottom: 0.75pt solid #ddd !important;
+    padding-bottom: 1mm !important;
+  }
+
+  .inv-party-name {
+    font-size: 10pt !important;
+    font-weight: 600 !important;
+    margin: 0 0 0.5mm 0 !important;
+  }
+
+  .inv-party-line {
+    font-size: 9pt !important;
+    color: #444 !important;
+    margin: 0 !important;
+    line-height: 1.55 !important;
+  }
+
+  /* ── Line items table ────────────────────────────────────────────────────── */
+  .inv-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    margin: 0 auto 0 !important;
+    font-size: 10pt !important;
+    table-layout: fixed !important;
+    border: 1pt solid #cfcfcf !important;
+  }
+
+  /* Hide thead labels row to remove the black “labels” strip */
+  .inv-table thead {
+    display: table-header-group !important;
+  }
+
+  .inv-th {
+    background: transparent !important;
+    color: #111 !important;
+    font-weight: 700 !important;
+    font-size: 8pt !important;
+    letter-spacing: 0.06em !important;
+    text-transform: uppercase !important;
+    padding: 2.2mm 3mm !important;
+    border-bottom: 1pt solid #cfcfcf !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .inv-th-center {
+    text-align: center !important;
+  }
+  .inv-th-left {
+    text-align: left !important;
+  }
+  .inv-th-right {
+    text-align: right !important;
+  }
+
+  /* Column widths */
+  /* Since we hide <thead>, apply widths to tbody cells by position */
+  .inv-td:nth-child(1) {
+    width: 10% !important;
+  }
+  .inv-td:nth-child(2) {
+    width: 42% !important;
+  }
+  .inv-td:nth-child(3) {
+    width: 10% !important;
+  }
+  .inv-td:nth-child(4) {
+    width: 18% !important;
+  }
+  .inv-td:nth-child(5) {
+    width: 20% !important;
+  }
+
+  .inv-tr {
+    border-bottom: 0.5pt solid #e0e0e0 !important;
+  }
+
+  .inv-tr:last-child {
+    border-bottom: 0.75pt solid #bbb !important;
+  }
+
+  .inv-tr-sundry {
+    background: #fafafa !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .inv-td {
+    padding: 2.0mm 3mm !important;
+    vertical-align: middle !important;
+    color: #111 !important;
+    border-bottom: 0.5pt solid #e6e6e6 !important;
+  }
+
+  /* Vertical gridlines for a clear table look */
+  .inv-td + .inv-td,
+  .inv-th + .inv-th {
+    border-left: 0.5pt solid #e6e6e6 !important;
+  }
+
+  .inv-td-center {
+    text-align: center !important;
+  }
+  .inv-td-right {
+    text-align: right !important;
+  }
+  .inv-td-muted {
+    color: #777 !important;
+  }
+  .inv-tabular {
+    font-variant-numeric: tabular-nums !important;
+  }
+
+  .inv-sundry-badge {
+    display: inline-block !important;
+    font-size: 6.5pt !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+    background: #f0e6c8 !important;
+    color: #7a5a1a !important;
+    border-radius: 2pt !important;
+    padding: 0.3mm 1.5mm !important;
+    margin-right: 2mm !important;
+    vertical-align: middle !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* ── Totals footer ───────────────────────────────────────────────────────── */
+  .inv-tfoot-row td {
+    padding: 1.2mm 3mm !important;
+    font-size: 9pt !important;
+  }
+
+  .inv-tfoot-sub .inv-tfoot-label,
+  .inv-tfoot-sub .inv-tfoot-val {
+    color: #444 !important;
+  }
+
+  .inv-tfoot-label {
+    text-align: right !important;
+    padding-right: 5mm !important;
+  }
+
+  .inv-tfoot-val {
+    text-align: right !important;
+    font-variant-numeric: tabular-nums !important;
+  }
+
+  .inv-paid {
+    color: #2a7a2a !important;
+  }
+
+  .inv-tfoot-total {
+    border-top: 1.5pt solid #111 !important;
+  }
+
+  .inv-tfoot-total .inv-tfoot-total-label {
+    text-align: right !important;
+    padding-right: 5mm !important;
+    font-size: 11pt !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+  }
+
+  .inv-tfoot-total .inv-tfoot-total-val {
+    text-align: right !important;
+    font-size: 12pt !important;
+    font-weight: 700 !important;
+    background: transparent !important;
+    color: #111 !important;
+    padding: 2.5mm 3mm !important;
+    font-variant-numeric: tabular-nums !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    border: 1pt solid #111 !important;
+  }
+
+  /* ── Footer ──────────────────────────────────────────────────────────────── */
+  .inv-footer {
+    margin-top: 7mm !important;
+    padding-top: 4mm !important;
+    border-top: 0.75pt solid #ccc !important;
+    display: flex !important;
+    gap: 12mm !important;
+  }
+
+  .inv-footer-section {
+    flex: 1 !important;
+  }
+
+  .inv-footer-heading {
+    font-size: 8pt !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.07em !important;
+    margin: 0 0 1mm 0 !important;
+    color: #333 !important;
+  }
+
+  .inv-footer-body {
+    font-size: 8.5pt !important;
+    color: #444 !important;
+    margin: 0 !important;
+    line-height: 1.55 !important;
+  }
+
+  .inv-thank-you {
+    margin-top: 6mm !important;
+    text-align: center !important;
+    font-size: 8.5pt !important;
+    color: #888 !important;
+    font-style: italic !important;
+  }
+}

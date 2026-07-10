@@ -1,0 +1,229 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Party {
+  id                    String   @id @default(cuid())
+  name                  String
+  phone                 String   @default("")
+  address               String   @default("")
+  openingBalance        Float    @default(0)
+  /** Positive = customer owes us / we owe supplier (see partyType) */
+  balance               Float    @default(0)
+  partyType             String
+  lastPaymentAt         DateTime?
+  /** Customers only: warn if balance owed and no payment in this many days */
+  maxDaysWithoutPayment Int?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  bills        Bill[]
+  payments     Payment[]
+  transactions LedgerTransaction[]
+
+  @@index([partyType, balance])
+  @@index([name])
+}
+
+model Category {
+  id         String    @id @default(cuid())
+  name       String
+  parentId   String?
+  /** Root → leaf ids for aggregation (stored as JSON string array) */
+  ancestorIds Json     @default("[]")
+  /** Display color: hex string or CSS gradient */
+  color      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  parent   Category? @relation("CategoryToChildren", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryToChildren")
+  items    Item[]
+
+  @@index([parentId])
+  @@index([name])
+}
+
+model Item {
+  id               String   @id @default(cuid())
+  name             String
+  categoryId       String
+  price            Float
+  purchasePrice    Float    @default(0)
+  quantity         Float    @default(0)
+  lowStockThreshold Float   @default(5)
+  unit             String   @default("pieces")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  category Category @relation(fields: [categoryId], references: [id])
+  billLines BillLine[]
+
+  @@index([categoryId])
+  @@index([name])
+}
+
+model BankAccount {
+  id            String   @id @default(cuid())
+  accountName   String
+  bankName      String
+  accountNumber String
+  ifscCode      String   @default("")
+  upiId         String   @default("")
+  isPrimary     Boolean  @default(false)
+  notes         String   @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  bills    Bill[]
+  payments Payment[]
+
+  @@index([isPrimary])
+}
+
+model Bill {
+  id            String   @id @default(cuid())
+  billKind      String   @default("sale")
+  /** Business date (invoice / purchase date) */
+  billDate      DateTime @default(now())
+  billNumber    String   @unique
+  partyId       String?
+  displayName   String
+  total         Float
+  paidAmount    Float
+  creditAmount  Float
+  paymentMode   String
+  bankAccountId String?
+  hourOfDay     Int
+  notes         String   @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  party       Party?       @relation(fields: [partyId], references: [id])
+  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
+  lines       BillLine[]
+  sundryCharges BillSundryCharge[]
+  stockWarnings BillStockWarning[]
+  transactions LedgerTransaction[]
+
+  @@index([partyId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+}
+
+model BillLine {
+  id            String   @id @default(cuid())
+  billId        String
+  itemId        String
+  name          String
+  quantity      Float
+  unitPrice     Float
+  purchasePrice Float   @default(0)
+  lineTotal     Float
+
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+  item Item @relation(fields: [itemId], references: [id])
+
+  @@index([billId])
+  @@index([itemId])
+}
+
+model BillSundryCharge {
+  id     String @id @default(cuid())
+  billId String
+  label  String
+  amount Float
+
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([billId])
+}
+
+model BillStockWarning {
+  id             String  @id @default(cuid())
+  billId         String
+  itemId         String
+  itemName       String
+  requested      Float
+  available      Float
+  appliedNegative Boolean @default(false)
+
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([billId])
+  @@index([itemId])
+}
+
+model Payment {
+  id            String   @id @default(cuid())
+  partyId       String
+  amount        Float
+  paymentMode   String
+  bankAccountId String?
+  date          DateTime
+  notes         String   @default("")
+  direction     String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  party       Party       @relation(fields: [partyId], references: [id])
+  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
+  transactions LedgerTransaction[]
+
+  @@index([partyId, date(sort: Desc)])
+  @@index([date(sort: Desc)])
+}
+
+model LedgerTransaction {
+  id               String   @id @default(cuid())
+  partyId           String
+  partyType         String
+  entryType         String
+  amount            Float
+  paymentMode       String
+  date              DateTime
+  notes             String   @default("")
+  refType           String   @default("manual")
+  billId            String?
+  paymentId         String?
+  balanceAfterParty Float?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  party   Party   @relation(fields: [partyId], references: [id])
+  bill    Bill?   @relation(fields: [billId], references: [id])
+  payment Payment? @relation(fields: [paymentId], references: [id])
+
+  @@index([partyId, date(sort: Desc)])
+  @@index([date(sort: Desc)])
+  @@index([createdAt])
+}
+
+model BusinessProfile {
+  id        String   @id @default(cuid())
+  key       String   @unique @default("singleton")
+  name      String   @default("")
+  address   String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AppSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([key])
+}
+
+model Counter {
+  id  String @id
+  seq Int    @default(0)
+}
+

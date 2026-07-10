@@ -91,7 +91,7 @@ export function BillDetailContent({
               "rounded-full px-2 py-0.5 text-xs font-medium",
               kind === "sale"
                 ? "bg-green-500/10 text-green-600"
-                : "bg-blue-500/10 text-blue-600",
+                : "bg-blue-500/10 text-gray-600",
             )}
           >
             {kind}

@@ -1,8 +1,6 @@
-import { connectDb } from "@/lib/db";
+import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
-import { Category } from "@/models/Category";
-import { Item } from "@/models/Item";
-import mongoose from "mongoose";
+import { withMongoId } from "@/lib/id-compat";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -19,18 +17,20 @@ export async function PATCH(
   try {
     await connectDb();
     const { id } = await ctx.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) return jsonError("Invalid id", 400);
     const body = await req.json();
     const parsed = patchSchema.safeParse(body);
     if (!parsed.success) {
       return jsonError(JSON.stringify(parsed.error.flatten()), 422);
     }
-    const row = await Category.findById(id);
+    const row = await db.category.findUnique({ where: { id } });
     if (!row) return jsonError("Not found", 404);
-    if (parsed.data.name !== undefined) row.name = parsed.data.name.trim();
-    if ("color" in parsed.data) (row as unknown as { color: string | null }).color = parsed.data.color ?? null;
-    await row.save();
-    return jsonOk(row.toObject());
+
+    const data: { name?: string; color?: string | null } = {};
+    if (parsed.data.name !== undefined) data.name = parsed.data.name.trim();
+    if ("color" in parsed.data) data.color = parsed.data.color ?? null;
+
+    const updated = await db.category.update({ where: { id }, data });
+    return jsonOk(withMongoId(updated));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);
@@ -44,15 +44,15 @@ export async function DELETE(
   try {
     await connectDb();
     const { id } = await ctx.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) return jsonError("Invalid id", 400);
     const [children, items] = await Promise.all([
-      Category.countDocuments({ parentId: id }),
-      Item.countDocuments({ categoryId: id }),
+      db.category.count({ where: { parentId: id } }),
+      db.item.count({ where: { categoryId: id } }),
     ]);
     if (children > 0) return jsonError("Remove child categories first", 400);
     if (items > 0) return jsonError("Reassign or delete items in this category", 400);
-    const res = await Category.findByIdAndDelete(id);
-    if (!res) return jsonError("Not found", 404);
+    const existing = await db.category.findUnique({ where: { id } });
+    if (!existing) return jsonError("Not found", 404);
+    await db.category.delete({ where: { id } });
     return jsonOk({ ok: true });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";

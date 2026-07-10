@@ -1,9 +1,12 @@
-import type { PartyDocument } from "@/models/Party";
-import { LedgerTransaction } from "@/models/Transaction";
+import { db } from "@/lib/db";
 
 export async function recordOpeningBalanceIfNeeded(
-  party: PartyDocument,
-  session?: import("mongoose").ClientSession,
+  party: {
+    id: string;
+    openingBalance: number;
+    partyType: "customer" | "supplier";
+    balance: number;
+  },
 ) {
   const opening = party.openingBalance;
   if (opening === 0) return;
@@ -23,20 +26,17 @@ export async function recordOpeningBalanceIfNeeded(
     entryType = isCustomer ? "debit" : "credit";
   }
 
-  await LedgerTransaction.create(
-    [
-      {
-        partyId: party._id,
-        partyType: party.partyType,
-        entryType,
-        amount,
-        paymentMode: "credit",
-        date: new Date(),
-        notes: "Opening balance",
-        refType: "adjustment",
-        balanceAfterParty: party.balance,
-      },
-    ],
-    session ? { session } : {},
-  );
+  await db.ledgerTransaction.create({
+    data: {
+      partyId: party.id,
+      partyType: party.partyType,
+      entryType,
+      amount,
+      paymentMode: "credit",
+      date: new Date(),
+      notes: "Opening balance",
+      refType: "adjustment",
+      balanceAfterParty: party.balance,
+    },
+  });
 }

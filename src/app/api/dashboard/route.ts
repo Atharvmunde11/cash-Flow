@@ -1,11 +1,12 @@
 import { connectDb } from "@/lib/db";
-import { jsonError, jsonOk } from "@/lib/http";
+import { formatRouteError, jsonError, jsonOk } from "@/lib/http";
 import {
   getCategoryRevenuePie,
   getCreditAlerts,
   getDailyRevenueSeries,
   getDashboardMetrics,
   getHourlyTraffic,
+  getLatestSaleBillDate,
   type PieRange,
 } from "@/lib/services/dashboard-service";
 
@@ -16,9 +17,14 @@ export async function GET(req: Request) {
     await connectDb();
     const { searchParams } = new URL(req.url);
     const weekOffset = Number(searchParams.get("weekOffset") ?? "0") || 0;
-    const pieRange = (searchParams.get("pieRange") ?? "week") as PieRange;
+    const pieRange = (searchParams.get("pieRange") ?? "all") as PieRange;
     const safePie: PieRange =
-      pieRange === "today" || pieRange === "month" ? pieRange : "week";
+      pieRange === "today" ||
+      pieRange === "week" ||
+      pieRange === "month" ||
+      pieRange === "all"
+        ? pieRange
+        : "all";
 
     const [
       metrics,
@@ -26,12 +32,14 @@ export async function GET(req: Request) {
       categoryPie,
       traffic,
       credit,
+      latestSaleBillDate,
     ] = await Promise.all([
       getDashboardMetrics(),
       getDailyRevenueSeries(weekOffset),
       getCategoryRevenuePie(safePie),
       getHourlyTraffic(),
       getCreditAlerts(),
+      getLatestSaleBillDate(),
     ]);
 
     return jsonOk({
@@ -40,9 +48,11 @@ export async function GET(req: Request) {
       categoryPie,
       traffic,
       credit,
+      latestSaleBillDate: latestSaleBillDate?.toISOString() ?? null,
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Failed";
+    const msg = formatRouteError(e);
+    console.error("[api/dashboard]", e);
     return jsonError(msg, 500);
   }
 }
