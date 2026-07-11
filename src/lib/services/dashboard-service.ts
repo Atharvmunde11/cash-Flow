@@ -1,4 +1,3 @@
-import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { withMongoIds } from "@/lib/id-compat";
 
@@ -95,26 +94,10 @@ export async function getDashboardMetrics() {
       },
       _sum: { creditAmount: true },
     }),
-    db.$queryRaw<
-      Array<{
-        id: string;
-        name: string;
-        categoryId: string;
-        price: number;
-        purchasePrice: number;
-        quantity: number;
-        lowStockThreshold: number;
-        unit: string;
-        createdAt: string;
-        updatedAt: string;
-      }>
-    >(Prisma.sql`
-      SELECT *
-      FROM Item
-      WHERE quantity <= lowStockThreshold
-      ORDER BY quantity ASC
-      LIMIT 50
-    `),
+    db.item.findMany({
+      orderBy: { quantity: "asc" },
+      take: 200,
+    }),
     db.bill.aggregate({
       where: {
         billDate: { gte: metricsStart, lt: metricsEnd },
@@ -145,12 +128,16 @@ export async function getDashboardMetrics() {
   const cashCollection =
     (dayCashBills._sum.paidAmount ?? 0) + (dayCashPayments._sum.amount ?? 0);
 
+  const lowStockFiltered = lowStockItems.filter(
+    (item) => item.quantity <= item.lowStockThreshold,
+  );
+
   return {
     todayRevenue,
     pendingPayments,
     cashCollection,
     metricsDayLabel,
-    lowStockItems: withMongoIds(lowStockItems),
+    lowStockItems: withMongoIds(lowStockFiltered.slice(0, 50)),
   };
 }
 

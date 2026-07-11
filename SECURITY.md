@@ -39,7 +39,7 @@ CashFlow is a **local-first** application:
 ### Built-in protections
 
 - **Localhost API guard** — non-loopback `Host` headers receive `403` on `/api/*`
-- **Import limits** — max 20 files, 25 MB each, 100 MB total per request
+- **Import** — localhost-only; validate file types server-side
 - **Health endpoint** — returns `{ ok: true }` only (no paths or env leakage)
 - **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, etc. via `next.config.ts`
 - **Electron** — `contextIsolation: true`, `nodeIntegration: false`; PDF save validates bill IDs

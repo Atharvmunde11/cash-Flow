@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useEffect, useState } from "react";
 import { ImportPanel } from "@/components/import/import-panel";
+import { AppUpdatePanel } from "@/components/settings/app-update-panel";
 
 type BusinessProfile = { name: string; address: string; phone: string };
 
@@ -118,6 +119,8 @@ export default function SettingsPage() {
           <p className="text-sm text-destructive">Failed to load settings.</p>
         ) : null}
       </div>
+
+      <AppUpdatePanel />
 
       <div className="rounded-xl border p-4 space-y-5">
         <div>

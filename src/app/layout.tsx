@@ -6,6 +6,10 @@ export const metadata: Metadata = {
   title: "CashFlow",
   description:
     "Local-first billing, inventory, and credit tracking for small businesses.",
+  icons: {
+    icon: [{ url: "/icon.png", type: "image/png" }],
+    apple: [{ url: "/icon.png", type: "image/png" }],
+  },
 };
 
 export default function RootLayout({

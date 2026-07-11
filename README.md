@@ -1,54 +1,60 @@
-<<<<<<< HEAD
 # CashFlow
 
-Local-first accounting, billing, inventory, and credit tracking for small businesses. Built with **Next.js**, **SQLite (Prisma)**, and optional **Electron** desktop packaging.
+**Billing, inventory, and credit tracking for small businesses — on your machine, not in the cloud.**
 
-No cloud account or `.env` file required — clone, install, migrate, and run. All business data stays in a local SQLite file.
+CashFlow is a local-first accounting app for shops and traders who want invoices, stock, party ledgers, and payments in one place. Data lives in a single SQLite file on your PC. No signup, no subscription, no `.env` file for day-to-day use.
 
-<!-- Add screenshots here before publishing — see "Before you go public" in README -->
+Built with **Next.js**, **SQLite (Prisma)**, and an optional **Electron** desktop app for Windows.
+
+<!-- Screenshots: add dashboard, billing, and import panels here before publishing -->
+
+---
+
+## Why CashFlow?
+
+| | |
+|---|---|
+| **Your data stays local** | One SQLite database per install — nothing leaves your machine unless you export it |
+| **Works offline** | Full app runs without internet after install |
+| **Tally & BUSY import** | Bring over customers, stock, invoices, and payment vouchers |
+| **Desktop or browser** | Use the Windows installer or run in dev/Docker |
+
+---
 
 ## Features
 
-- Sales & purchase invoicing with PDF export
-- Party ledger, payments, and money owed (credit)
-- Inventory, categories, and low-stock alerts
-- Bank accounts and UPI QR codes
-- Dashboard with revenue, collections, and category mix
-- **Import from Tally or BUSY** (masters + vouchers)
-- Desktop app (Windows x64) via Electron
-- Docker deployment with persisted SQLite volume
+**Invoicing & purchases**
+- Sales and purchase bills with PDF export
+- Sundry charges, stock warnings, and bill history
 
-## Architecture
+**Parties & credit**
+- Customer and supplier ledgers
+- Payments, balances, and money owed (credit tracking)
 
-| Layer | Technology |
-|-------|------------|
-| UI | Next.js 16, React 19, Tailwind CSS |
-| Data | SQLite via Prisma + `better-sqlite3` |
-| Desktop | Electron 41 (embedded Next standalone server) |
-| Import | XML parsers for Tally / BUSY export files |
+**Inventory**
+- Items, categories, and low-stock alerts
 
-**Data model:** One SQLite database per installation — designed for a single local shop.
+**Finance**
+- Bank accounts and UPI QR codes on invoices
+- Dashboard: revenue, collections, category mix
 
-Default database locations:
+**Migration**
+- Import from **Tally** or **BUSY** (masters + vouchers, merge or replace)
 
-- **Development:** `dev.db` in the project root (automatic; no config needed)
-- **Electron:** `%APPDATA%/CashFlow/cashflow.db` (Windows user data)
-- **Docker:** `/data/cashflow.db` in the `cashflow-data` volume
+**Desktop (Windows)**
+- Installers for **x64** and **arm64**
+- Auto-update checks via [GitHub Releases](https://github.com/Atharvmunde11/cash-Flow/releases)
+- Database and settings in `%APPDATA%\CashFlow\`
 
-Shop name, phone, address, and UPI IDs are stored in SQLite (Settings / Bank Accounts), not environment variables.
+---
 
 ## Quick start
 
-### Prerequisites
-
-- Node.js 20+
-- npm
-
-### Setup
+**Requirements:** Node.js 20+, npm
 
 ```bash
 git clone https://github.com/Atharvmunde11/cash-Flow.git
-cd <your-clone-folder>
+cd cash-Flow
 npm install
 npx prisma migrate deploy
 npm run dev
@@ -56,34 +62,47 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-### Optional overrides
+Set your business name and phone under **Settings**. No cloud account required.
 
-You only need environment variables for non-default deployments:
+---
 
-| Variable | When needed |
-|----------|-------------|
-| `DATABASE_URL` | Custom SQLite path (Docker sets `file:/data/cashflow.db`) |
+## Windows desktop app
 
-## Import from Tally or BUSY
-
-1. Open **Settings → Import from Tally or BUSY**
-2. Export from your accounting software:
-   - **BUSY:** `MSAll` (masters) + `Vh` (vouchers) XML files
-   - **Tally:** XML export (masters and vouchers)
-3. Upload one or both files and choose **Merge** or **Replace**
-
-## Electron desktop (Windows x64)
+Build both installers (x64 + arm64):
 
 ```bash
 npm run electron-build
 ```
 
-Outputs:
+Or one architecture:
 
-- `dist/CashFlow Setup 0.1.0.exe` — installer
-- `dist/win-unpacked/CashFlow.exe` — portable build
+```bash
+npm run electron-build:x64    # Intel / AMD PCs
+npm run electron-build:arm64  # ARM Windows (e.g. Surface)
+```
 
-After building Electron, dev still works — the build script restores the Node native module automatically.
+Installers are written to `dist/`:
+
+| File | Platform |
+|------|----------|
+| `CashFlow-x64-Setup-<version>.exe` | 64-bit Windows |
+| `CashFlow-arm64-Setup-<version>.exe` | ARM64 Windows |
+
+The installer is a guided setup: license → install folder → shortcuts → launch.
+
+**Updates:** The desktop app checks GitHub Releases on startup. Publish new versions from [Releases](https://github.com/Atharvmunde11/cash-Flow/releases) (see `npm run electron-publish:x64` / `electron-publish:arm64` in `package.json`).
+
+---
+
+## Import from Tally or BUSY
+
+1. Open **Settings → Import from Tally or BUSY**
+2. Export from your accounting software:
+   - **BUSY:** `MSAll` (masters) + `Vh` (vouchers)
+   - **Tally:** XML export (masters and vouchers)
+3. Upload files and choose **Merge** or **Replace**
+
+---
 
 ## Docker
 
@@ -91,68 +110,104 @@ After building Electron, dev still works — the build script restores the Node 
 docker compose up --build
 ```
 
-- App: http://localhost:3000
-- Health: http://localhost:3000/api/health
+| | |
+|---|---|
+| App | http://localhost:3000 |
+| Health | http://localhost:3000/api/health |
+| Database | `/data/cashflow.db` in the `cashflow-data` volume |
+
+---
+
+## Where data lives
+
+| Mode | Database path |
+|------|----------------|
+| Development | `dev.db` in project root (default) |
+| Electron | `%APPDATA%\CashFlow\cashflow.db` |
+| Docker | `file:/data/cashflow.db` |
+
+Override with `DATABASE_URL` only when you need a custom path. Shop profile and UPI details are stored in SQLite, not in environment variables.
+
+---
+
+## Tech stack
+
+| Layer | Stack |
+|-------|--------|
+| UI | Next.js 16, React 19, Tailwind CSS |
+| Data | SQLite, Prisma, better-sqlite3 |
+| Desktop | Electron 41 (embedded Next standalone server) |
+| Import | XML parsers for Tally / BUSY exports |
+
+---
 
 ## Scripts
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Next.js dev server |
+| `npm run dev` | Development server |
 | `npm run build` | Production build |
 | `npm run start` | Run production server |
-| `npm test` | Run unit tests |
-| `npm run electron-build` | Build Windows x64 desktop installer |
-| `npm run rebuild-sqlite-for-node` | Fix SQLite native module after Electron rebuild |
+| `npm test` | Unit tests |
+| `npm run electron-build` | Build x64 + arm64 Windows installers |
+| `npm run electron-build:x64` | x64 installer only |
+| `npm run electron-build:arm64` | arm64 installer only |
+| `npm run electron-publish:x64` | Build & publish x64 to GitHub Releases |
+| `npm run electron-publish:arm64` | Build & publish arm64 to GitHub Releases |
+| `npm run rebuild-sqlite-for-node` | Restore Node native module after Electron build |
+
+---
 
 ## Troubleshooting
 
-### `better_sqlite3.node is not a valid Win32 application`
-
-After `npm run electron-build`, run:
+**`better_sqlite3.node` version mismatch after Electron build**
 
 ```bash
 npm run rebuild-sqlite-for-node
 ```
 
-(The electron build script does this automatically at the end.)
+The electron build scripts run this automatically at the end; use the command above if dev breaks after a manual rebuild.
 
-## Contributing
+**Desktop app database errors**
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Check `%APPDATA%\CashFlow\cashflow-startup.log` for migration or startup details.
 
-## Security
+---
 
-See [SECURITY.md](SECURITY.md).
+## Contributing & security
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — setup and pull requests
+- [SECURITY.md](SECURITY.md) — reporting vulnerabilities
+
+---
 
 ## License
 
 CashFlow is **source available** under the [Elastic License 2.0 (ELv2)](LICENSE).
 
-| Allowed | Not allowed |
-|---------|-------------|
-| Personal use (free) | Offering CashFlow as a **hosted / managed service** to third parties (SaaS) |
-| Internal business use — any size | Letting customers use CashFlow's features through **your** cloud product |
-| Self-host on your own PC or servers | Removing copyright / license notices |
-| Modify for your own use | |
-| On-prem installs for a client's **internal** use (e.g. IT consultant) | |
+| You can | You cannot |
+|---------|------------|
+| Use internally at any business size | Offer CashFlow as a hosted SaaS to third parties |
+| Self-host on your own hardware | Resell access through your cloud product |
+| Modify for your own use | Remove license or copyright notices |
+| Install on-prem for a client (e.g. IT consultant) | |
 
-This is **not** a traditional OSI "open source" license (like MIT). It is the same model used by [Elasticsearch](https://www.elastic.co/licensing/elastic-license) and other products that allow free internal use while blocking competing hosted offerings.
+Not MIT/OSI open source — same model as [Elasticsearch](https://www.elastic.co/licensing/elastic-license): free internal use, no competing hosted service.
 
-Questions about commercial licensing beyond ELv2: see [SECURITY.md](SECURITY.md) contact.
+Commercial licensing questions: see [SECURITY.md](SECURITY.md).
 
-## Before you go public (maintainer checklist)
+---
 
-These steps are best done by the repo owner:
+## Author
 
-1. **Screenshots** — Add 2–3 images to this README (dashboard, billing, import)
-2. **Git history** — Confirm `.env` and `*.db` were never committed: `git log --all -- .env dev.db`
-3. **GitHub** — Create the public repo, add description + topics (`accounting`, `tally`, `busy`, `electron`, `sqlite`)
-4. **Release** — Tag `v0.1.0` and paste [CHANGELOG.md](CHANGELOG.md) notes
-5. **Security contact** — Update the email in [SECURITY.md](SECURITY.md) if needed
-6. **Smoke test** — Fresh clone on another machine: `npm ci && npx prisma migrate deploy && npm run dev`
+**Atharv Munde** — [github.com/Atharvmunde11](https://github.com/Atharvmunde11)
 
-=======
-# cash-Flow
-Local-first billing, inventory, and accounting for small businesses. Next.js + SQLite, Tally/BUSY import, PDF invoices, Electron desktop. No cloud required.
->>>>>>> 91475cfe904c296f739519850fb24647aafbda1a
+---
+
+## Maintainer checklist (before going public)
+
+1. Add 2–3 screenshots to this README (dashboard, billing, import)
+2. Confirm secrets never committed: `git log --all -- .env dev.db`
+3. Set GitHub **About** description and topics: `accounting`, `billing`, `inventory`, `tally`, `busy`, `electron`, `sqlite`, `nextjs`
+4. Tag `v0.1.0` and publish [CHANGELOG.md](CHANGELOG.md) on Releases
+5. Smoke test on a clean machine: `npm ci && npx prisma migrate deploy && npm run dev`

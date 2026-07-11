@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
+import { BrandLogo } from "@/components/layout/brand-logo";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -269,9 +270,7 @@ export function AppSidebar({
         )}
       >
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-sidebar-border px-3">
-          {!collapsed && (
-            <div className="text-sm font-semibold tracking-tight">CashFlow</div>
-          )}
+          {!collapsed ? <BrandLogo /> : null}
           <Button variant="ghost" size="icon" onClick={handleCollapsedToggle}>
             <Menu className="size-4" />
           </Button>
@@ -305,7 +304,7 @@ export function AppSidebar({
           <Menu className="size-4" />
         </Button>
 
-        <span className="truncate text-sm font-semibold">CashFlow</span>
+        <BrandLogo />
 
         <div className="ml-auto">
           <ThemeToggle />
@@ -316,7 +315,9 @@ export function AppSidebar({
             side="left"
             className="flex min-h-0 w-[min(100vw-2rem,18rem)] flex-col p-0"
           >
-            <div className="border-b px-4 py-3 text-sm font-semibold">Menu</div>
+            <div className="border-b px-4 py-3">
+              <BrandLogo />
+            </div>
 
             <ScrollArea className="min-h-0 flex-1 scrollbar-hide">
               <div className="p-3">

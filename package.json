@@ -2,8 +2,13 @@
   "name": "cashflow",
   "version": "0.1.0",
   "main": "electron/main.js",
-  "description": "CashFlow — local-first billing and inventory for small businesses",
+  "description": "CashFlow - local-first billing and inventory for small businesses",
   "author": "Atharv Munde",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Atharvmunde11/cash-Flow.git"
+  },
+  "homepage": "https://github.com/Atharvmunde11/cash-Flow",
   "license": "Elastic-2.0",
   "private": false,
   "scripts": {
@@ -18,7 +23,12 @@
     "rebuild-native": "electron-rebuild -f -w better-sqlite3 -m .next/standalone",
     "rebuild-sqlite-for-node": "npm rebuild better-sqlite3",
     "prepare-electron": "node electron/prepare-next.js",
-    "electron-build": "npm run clean:next && npm run build && npm run prepare-electron && electron-rebuild -f -w better-sqlite3 -m .next/standalone && electron-builder --win --x64 && npm run rebuild-sqlite-for-node"
+    "electron-build:prep": "npm run clean:next && npm run build && npm run prepare-electron && node scripts/generate-icon-ico.js",
+    "electron-build": "node scripts/electron-build-win.js",
+    "electron-build:x64": "npm run electron-build:prep && node scripts/electron-rebuild-standalone.js x64 && npx electron-builder --win --x64 && npm run rebuild-sqlite-for-node",
+    "electron-build:arm64": "npm run electron-build:prep && node scripts/electron-rebuild-standalone.js arm64 && npx electron-builder --win --arm64 && npm run rebuild-sqlite-for-node",
+    "electron-publish:x64": "npm run electron-build:prep && node scripts/electron-rebuild-standalone.js x64 && npx electron-builder --win --x64 --publish always && npm run rebuild-sqlite-for-node",
+    "electron-publish:arm64": "npm run electron-build:prep && node scripts/electron-rebuild-standalone.js arm64 && npx electron-builder --win --arm64 --publish always && npm run rebuild-sqlite-for-node"
   },
   "build": {
     "appId": "com.cashflow.app",
@@ -34,24 +44,41 @@
     ],
     "files": [
       "electron/**/*",
-      ".next/standalone/**/*",
+      "public/icon.png",
+      "public/icon.ico",
       "package.json",
       "prisma/**/*",
-      "prisma.config.ts",
-      "node_modules/better-sqlite3/**/*",
-      "node_modules/bindings/**/*",
-      "node_modules/prisma/**/*",
-      "node_modules/@prisma/**/*",
-      "node_modules/dotenv/**/*"
+      "prisma.config.ts"
     ],
+    "afterPack": "./electron/after-pack.js",
+    "publish": {
+      "provider": "github",
+      "owner": "Atharvmunde11",
+      "repo": "cash-Flow",
+      "releaseType": "release"
+    },
     "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": ["x64"]
-        }
+      "target": "nsis",
+      "icon": "public/icon.ico",
+      "artifactName": "${productName}-${arch}-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "installerIcon": "public/icon.ico",
+      "uninstallerIcon": "public/icon.ico",
+      "installerHeaderIcon": "public/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "CashFlow",
+      "runAfterFinish": true,
+      "license": "LICENSE",
+      "installerLanguages": [
+        "en_US"
       ],
-      "icon": "public/icon.ico"
+      "displayLanguageSelector": false,
+      "deleteAppDataOnUninstall": false
     }
   },
   "dependencies": {
@@ -79,6 +106,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
+    "electron-updater": "^6.8.9",
     "fast-xml-parser": "^5.9.3",
     "fuse.js": "^7.1.0",
     "lucide-react": "^1.7.0",
@@ -112,6 +140,7 @@
     "electron-builder": "^26.8.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "png-to-ico": "^3.0.2",
     "tailwindcss": "^4",
     "tsx": "^4.20.5",
     "typescript": "^5"

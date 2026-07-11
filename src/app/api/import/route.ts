@@ -13,10 +13,6 @@ import { z } from "zod";
 
 export const runtime = "nodejs";
 
-const MAX_BYTES_PER_FILE = 25 * 1024 * 1024;
-const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
-const MAX_FILES = 20;
-
 const bodySchema = z.object({
   mode: z.enum(["merge", "replace"]).default("merge"),
   source: z.enum(["auto", "tally", "busy"]).default("auto"),
@@ -47,9 +43,6 @@ export async function POST(req: Request) {
     if (files.length === 0) {
       return jsonError("Choose at least one file to import", 422);
     }
-    if (files.length > MAX_FILES) {
-      return jsonError(`Too many files (max ${MAX_FILES})`, 413);
-    }
 
     const parsedBody = bodySchema.safeParse({
       mode: typeof modeRaw === "string" ? modeRaw : "merge",
@@ -67,17 +60,8 @@ export async function POST(req: Request) {
       parsedBody.data.source === "auto" ? undefined : parsedBody.data.source;
     const preWarnings: string[] = [];
     const parsedChunks: ParsedImportData[] = [];
-    let totalBytes = 0;
 
     for (const file of files) {
-      totalBytes += file.size;
-      if (totalBytes > MAX_TOTAL_BYTES) {
-        return jsonError(`Total upload too large (max ${MAX_TOTAL_BYTES / (1024 * 1024)} MB)`, 413);
-      }
-      if (file.size > MAX_BYTES_PER_FILE) {
-        return jsonError(`${file.name} is too large (max 25 MB per file)`, 413);
-      }
-
       const buffer = await file.arrayBuffer();
       const text = decodeImportBuffer(buffer);
 

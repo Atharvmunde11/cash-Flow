@@ -159,8 +159,7 @@ export function ImportPanel({ onImported, showGuide = true }: ImportPanelProps) 
         ) : null}
         <p className="text-xs text-muted-foreground">
           Select one or more files. Accepted: <code>.xml</code>,{" "}
-          <code>.dat</code> (XML), <code>.csv</code> — max 25 MB each, up to 20
-          files.
+          <code>.dat</code> (XML), <code>.csv</code>.
         </p>
       </div>
 
