@@ -59,7 +59,8 @@ function run(label, command, args, opts = {}) {
   console.log(`\n> ${label}: ${command} ${args.join(" ")}\n`);
   const result = spawnSync(command, args, {
     stdio: "inherit",
-    shell: process.platform === "win32",
+    // Avoid shell:true when command is an absolute Windows path with spaces.
+    shell: false,
     env: process.env,
     ...opts,
   });
@@ -69,7 +70,7 @@ function run(label, command, args, opts = {}) {
 function runCapture(command, args) {
   const result = spawnSync(command, args, {
     encoding: "utf8",
-    shell: process.platform === "win32",
+    shell: false,
     env: process.env,
   });
   return {
