@@ -40,7 +40,8 @@ function addColumnIfMissing(
 export function ensureSqliteSchema(): void {
   const conn = new Database(resolveSqliteFilePath());
   try {
-    conn.exec(`
+    try {
+      conn.exec(`
       CREATE TABLE IF NOT EXISTS "Party" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -89,7 +90,7 @@ export function ensureSqliteSchema(): void {
       );
       CREATE INDEX IF NOT EXISTS "Item_categoryId_idx" ON "Item"("categoryId");
       CREATE INDEX IF NOT EXISTS "Item_name_idx" ON "Item"("name");
-      CREATE INDEX IF NOT EXISTS "Item_externalCode_idx" ON "Item"("externalCode");
+      -- Item_externalCode_idx created after addColumnIfMissing (older DBs lack the column)
 
       CREATE TABLE IF NOT EXISTS "BankAccount" (
         "id" TEXT NOT NULL PRIMARY KEY,
@@ -313,8 +314,7 @@ export function ensureSqliteSchema(): void {
       CREATE INDEX IF NOT EXISTS "LedgerAccount_accountKind_idx"
         ON "LedgerAccount"("accountKind");
       CREATE INDEX IF NOT EXISTS "LedgerAccount_groupId_idx" ON "LedgerAccount"("groupId");
-      CREATE INDEX IF NOT EXISTS "LedgerAccount_externalCode_idx"
-        ON "LedgerAccount"("externalCode");
+      -- LedgerAccount_externalCode_idx created after column ensure
       CREATE INDEX IF NOT EXISTS "LedgerAccount_name_idx" ON "LedgerAccount"("name");
 
       CREATE TABLE IF NOT EXISTS "Voucher" (
@@ -444,9 +444,18 @@ export function ensureSqliteSchema(): void {
       CREATE INDEX IF NOT EXISTS "EmployeeAdvance_date_idx"
         ON "EmployeeAdvance"("date");
     `);
+    } catch (error) {
+      // CREATE IF NOT EXISTS batch can still fail on older DBs when an index
+      // references a column that is not present yet. Column adds below repair that.
+      console.warn(
+        "[ensureSqliteSchema] base schema ensure partial failure:",
+        error instanceof Error ? error.message : error,
+      );
+    }
 
     // Older installs may already have core tables without newer columns.
-    // Add columns BEFORE indexes that reference them so upgrades never wipe data.
+    // Add columns BEFORE indexes that reference them so upgrades never abort
+    // mid-ensure (a failed CREATE INDEX used to skip these ALTER TABLEs).
     addColumnIfMissing(conn, "Party", "ledgerAccountId", '"ledgerAccountId" TEXT');
     addColumnIfMissing(
       conn,
@@ -458,6 +467,18 @@ export function ensureSqliteSchema(): void {
     addColumnIfMissing(conn, "Item", "mrp", '"mrp" REAL NOT NULL DEFAULT 0');
     addColumnIfMissing(conn, "Item", "hsnCode", "\"hsnCode\" TEXT NOT NULL DEFAULT ''");
     addColumnIfMissing(conn, "Item", "externalCode", '"externalCode" TEXT');
+    addColumnIfMissing(
+      conn,
+      "AccountGroup",
+      "externalCode",
+      '"externalCode" TEXT',
+    );
+    addColumnIfMissing(
+      conn,
+      "LedgerAccount",
+      "externalCode",
+      '"externalCode" TEXT',
+    );
 
     if (tableExists(conn, "Party") && columnExists(conn, "Party", "ledgerAccountId")) {
       conn.exec(
@@ -472,6 +493,21 @@ export function ensureSqliteSchema(): void {
       conn.exec(
         `CREATE UNIQUE INDEX IF NOT EXISTS "BankAccount_ledgerAccountId_key"
          ON "BankAccount"("ledgerAccountId")`,
+      );
+    }
+    if (tableExists(conn, "Item") && columnExists(conn, "Item", "externalCode")) {
+      conn.exec(
+        `CREATE INDEX IF NOT EXISTS "Item_externalCode_idx"
+         ON "Item"("externalCode")`,
+      );
+    }
+    if (
+      tableExists(conn, "LedgerAccount") &&
+      columnExists(conn, "LedgerAccount", "externalCode")
+    ) {
+      conn.exec(
+        `CREATE INDEX IF NOT EXISTS "LedgerAccount_externalCode_idx"
+         ON "LedgerAccount"("externalCode")`,
       );
     }
   } finally {
