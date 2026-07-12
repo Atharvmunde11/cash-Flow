@@ -37,9 +37,49 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const partyId = searchParams.get("partyId")?.trim();
     const today = searchParams.get("today");
+    const direction = searchParams.get("direction")?.trim();
 
+    const partyTypeParam = searchParams.get("partyType")?.trim();
     const where: Prisma.PaymentWhereInput = {};
     if (partyId) where.partyId = partyId;
+    if (direction === "received" || direction === "paid") {
+      where.direction = direction;
+    }
+
+    // Keep receipts/payments pages clean: customers only on received, suppliers only on paid.
+    const partyType =
+      partyTypeParam === "customer" || partyTypeParam === "supplier"
+        ? partyTypeParam
+        : direction === "received"
+          ? "customer"
+          : direction === "paid"
+            ? "supplier"
+            : undefined;
+    if (partyType) {
+      where.party = { partyType };
+    }
+
+    // Hide BUSY expense dumps that were imported as "paid" to fake suppliers
+    // (Commission, Tea, etc.) — keep real supplier payments and manual ones.
+    if (direction === "paid" || partyType === "supplier") {
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        {
+          OR: [
+            { NOT: { notes: { contains: "Imported BUSY paid" } } },
+            {
+              party: {
+                bills: {
+                  some: {
+                    billKind: { in: ["purchase", "purchase_return"] },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      ];
+    }
 
     if (today === "1") {
       const start = new Date();
@@ -75,6 +115,16 @@ export async function POST(req: Request) {
       where: { id: parsed.data.partyId },
     });
     if (!party) return jsonError("Party not found", 404);
+
+    if (
+      parsed.data.direction === "received" &&
+      party.partyType !== "customer"
+    ) {
+      return jsonError("Receipts can only be recorded for customers", 400);
+    }
+    if (parsed.data.direction === "paid" && party.partyType !== "supplier") {
+      return jsonError("Payments can only be recorded for suppliers", 400);
+    }
 
     const entryType =
       parsed.data.direction === "received" ? "credit" : "debit";

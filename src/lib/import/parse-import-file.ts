@@ -1,6 +1,12 @@
 import { XMLParser } from "fast-xml-parser";
 import {
-  asArray,
+  classifyAccountGroup,
+  isCashPartyAlias,
+  partyTypeFromAccountKind,
+  type AccountKind,
+} from "@/lib/import/account-classify";
+import {
+  busyItemQuantity,
   busyItemUnit,
   busyPartyType,
   looksLikeXml,
@@ -23,6 +29,41 @@ export type ImportPartyRow = {
   address: string;
   openingBalance: number;
   partyType: "customer" | "supplier";
+  gstin?: string;
+  pan?: string;
+  state?: string;
+  city?: string;
+  email?: string;
+  mobile?: string;
+  externalCode?: string;
+};
+
+export type ImportAccountGroupRow = {
+  name: string;
+  parentName?: string;
+  externalCode?: string;
+  isPrimary?: boolean;
+};
+
+export type ImportLedgerRow = {
+  name: string;
+  printName?: string;
+  groupName: string;
+  accountKind: AccountKind;
+  openingBalance: number;
+  phone?: string;
+  mobile?: string;
+  email?: string;
+  address1?: string;
+  address2?: string;
+  address3?: string;
+  gstin?: string;
+  pan?: string;
+  state?: string;
+  city?: string;
+  creditDays?: number;
+  externalCode?: string;
+  sourceSystem?: string;
 };
 
 export type ImportItemRow = {
@@ -32,6 +73,10 @@ export type ImportItemRow = {
   purchasePrice: number;
   quantity: number;
   unit: string;
+  altUnit?: string;
+  mrp?: number;
+  hsnCode?: string;
+  externalCode?: string;
 };
 
 export type ImportBillLine = {
@@ -46,18 +91,32 @@ export type ImportSundryCharge = {
   amount: number;
 };
 
+export type ImportAccountLine = {
+  ledgerName: string;
+  entryType: "debit" | "credit";
+  amount: number;
+  groupName?: string;
+  srNo?: number;
+};
+
 export type ImportBillRow = {
   externalNumber: string;
   billKind: "sale" | "purchase";
   billDate: Date;
   partyName: string;
   displayName: string;
+  /** True when party was Cash / CASH PAYMENT → Guest */
+  isGuest?: boolean;
   lines: ImportBillLine[];
   sundryCharges?: ImportSundryCharge[];
+  accountLines?: ImportAccountLine[];
   total: number;
   paidAmount: number;
   paymentMode: "cash" | "upi" | "credit" | "mixed" | "bank";
+  bankLedgerName?: string;
   notes: string;
+  externalId?: string;
+  seriesName?: string;
 };
 
 export type ImportPaymentRow = {
@@ -66,8 +125,13 @@ export type ImportPaymentRow = {
   amount: number;
   date: Date;
   paymentMode: "cash" | "upi" | "bank";
+  bankLedgerName?: string;
   notes: string;
   externalRef: string;
+  accountLines?: ImportAccountLine[];
+  /** Expense-only payment with no AR/AP party */
+  skipParty?: boolean;
+  externalId?: string;
 };
 
 const XML_PARSER_OPTIONS = {
@@ -80,7 +144,9 @@ const XML_PARSER_OPTIONS = {
 } as const;
 
 export type ParsedImportData = {
-  source: "tally" | "busy" | "csv";
+  source: "tally" | "busy" | "csv" | "zoho";
+  accountGroups: ImportAccountGroupRow[];
+  ledgers: ImportLedgerRow[];
   parties: ImportPartyRow[];
   items: ImportItemRow[];
   bills: ImportBillRow[];
@@ -92,6 +158,9 @@ export type ImportResult = {
   filesProcessed: number;
   fileNames: string[];
   counts: {
+    accountGroupsCreated: number;
+    ledgersCreated: number;
+    bankAccountsCreated: number;
     partiesCreated: number;
     partiesSkipped: number;
     itemsCreated: number;
@@ -101,6 +170,7 @@ export type ImportResult = {
     billsSkipped: number;
     paymentsCreated: number;
     paymentsSkipped: number;
+    vouchersCreated: number;
   };
   warnings: string[];
 };
@@ -110,15 +180,35 @@ export function mergeParsedImportData(
 ): ParsedImportData {
   const parties: ImportPartyRow[] = [];
   const items: ImportItemRow[] = [];
+  const accountGroups: ImportAccountGroupRow[] = [];
+  const ledgers: ImportLedgerRow[] = [];
   const bills: ImportBillRow[] = [];
   const payments: ImportPaymentRow[] = [];
   const seenParty = new Set<string>();
   const seenItem = new Set<string>();
+  const seenGroup = new Set<string>();
+  const seenLedger = new Set<string>();
 
   let source: ParsedImportData["source"] = "csv";
   for (const chunk of chunks) {
-    if (chunk.source === "tally" || chunk.source === "busy") {
+    if (
+      chunk.source === "tally" ||
+      chunk.source === "busy" ||
+      chunk.source === "zoho"
+    ) {
       source = chunk.source;
+    }
+    for (const group of chunk.accountGroups ?? []) {
+      const key = `${group.parentName ?? ""}:${group.name}`.toLowerCase();
+      if (seenGroup.has(key)) continue;
+      seenGroup.add(key);
+      accountGroups.push(group);
+    }
+    for (const ledger of chunk.ledgers ?? []) {
+      const key = `${ledger.accountKind}:${ledger.name}`.toLowerCase();
+      if (seenLedger.has(key)) continue;
+      seenLedger.add(key);
+      ledgers.push(ledger);
     }
     for (const party of chunk.parties) {
       const key = `${party.partyType}:${party.name.toLowerCase()}`;
@@ -136,7 +226,7 @@ export function mergeParsedImportData(
     payments.push(...chunk.payments);
   }
 
-  return { source, parties, items, bills, payments };
+  return { source, accountGroups, ledgers, parties, items, bills, payments };
 }
 
 export function busyFileLooksMastersOnly(content: string): boolean {
@@ -282,28 +372,65 @@ export function parseTallyXml(xml: string): ParsedImportData {
   const parser = new XMLParser(XML_PARSER_OPTIONS);
 
   const root = parser.parse(xml);
-  const ledgers: Record<string, unknown>[] = [];
+  const ledgersRaw: Record<string, unknown>[] = [];
+  const groupsRaw: Record<string, unknown>[] = [];
   const stockItems: Record<string, unknown>[] = [];
-  walkNodes(root, "LEDGER", ledgers);
+  walkNodes(root, "LEDGER", ledgersRaw);
+  walkNodes(root, "GROUP", groupsRaw);
   walkNodes(root, "STOCKITEM", stockItems);
 
+  const accountGroups: ImportAccountGroupRow[] = [];
+  const seenGroup = new Set<string>();
+  for (const g of groupsRaw) {
+    const name = textOf(g.NAME ?? g["@_NAME"]);
+    if (!name) continue;
+    const parentName = textOf(g.PARENT) || undefined;
+    const key = `${parentName ?? ""}:${name}`.toLowerCase();
+    if (seenGroup.has(key)) continue;
+    seenGroup.add(key);
+    accountGroups.push({
+      name,
+      parentName,
+      isPrimary: !parentName,
+    });
+  }
+
+  const ledgers: ImportLedgerRow[] = [];
   const parties: ImportPartyRow[] = [];
-  for (const ledger of ledgers) {
+  for (const ledger of ledgersRaw) {
     const name = textOf(ledger.NAME ?? ledger["@_NAME"]);
     if (!name) continue;
+    if (isCashPartyAlias(name)) continue;
 
     const parent = textOf(ledger.PARENT);
-    const partyType = tallyPartyType(parent);
-    if (!partyType) continue;
-
+    const accountKind = classifyAccountGroup(parent);
     const closing = numOf(ledger.CLOSINGBALANCE ?? ledger.OPENINGBALANCE);
-    parties.push({
+    const phone = textOf(ledger.LEDGERPHONE ?? ledger.PHONE);
+    const address = textOf(ledger.ADDRESS ?? ledger.ADDRESS1);
+
+    ledgers.push({
       name,
-      phone: textOf(ledger.LEDGERPHONE ?? ledger.PHONE),
-      address: textOf(ledger.ADDRESS ?? ledger.ADDRESS1),
+      printName: name,
+      groupName: parent || "Primary",
+      accountKind,
       openingBalance: -closing,
-      partyType,
+      phone,
+      address1: address,
+      gstin: textOf(ledger.PARTYGSTIN ?? ledger.GSTIN),
+      sourceSystem: "tally",
     });
+
+    const partyType = partyTypeFromAccountKind(accountKind) ?? tallyPartyType(parent);
+    if (partyType) {
+      parties.push({
+        name,
+        phone,
+        address,
+        openingBalance: -closing,
+        partyType,
+        gstin: textOf(ledger.PARTYGSTIN ?? ledger.GSTIN),
+      });
+    }
   }
 
   const items: ImportItemRow[] = [];
@@ -323,16 +450,27 @@ export function parseTallyXml(xml: string): ParsedImportData {
       purchasePrice: numOf(stock.STANDARDCOST) || rate,
       quantity: openingQty,
       unit: textOf(stock.BASEUNITS) || "pieces",
+      hsnCode: textOf(stock.GSTAPPLICABLEDETAILS ?? stock.HSNCODE),
     });
   }
 
   const { bills, payments } = parseTallyVouchers(root);
 
-  return { source: "tally", parties, items, bills, payments };
+  return {
+    source: "tally",
+    accountGroups,
+    ledgers,
+    parties,
+    items,
+    bills,
+    payments,
+  };
 }
 
 function hasImportData(data: ParsedImportData): boolean {
   return (
+    (data.accountGroups?.length ?? 0) > 0 ||
+    (data.ledgers?.length ?? 0) > 0 ||
     data.parties.length > 0 ||
     data.items.length > 0 ||
     data.bills.length > 0 ||
@@ -356,15 +494,39 @@ function mergeParties(
 }
 
 function mergeItems(a: ImportItemRow[], b: ImportItemRow[]): ImportItemRow[] {
-  const seen = new Set(a.map((i) => i.name.toLowerCase()));
-  const merged = [...a];
+  const byName = new Map<string, ImportItemRow>();
+  for (const item of a) {
+    byName.set(item.name.toLowerCase(), { ...item });
+  }
   for (const item of b) {
     const key = item.name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(item);
+    const existing = byName.get(key);
+    if (!existing) {
+      byName.set(key, { ...item });
+      continue;
+    }
+    // Prefer a non-zero quantity when one side is missing stock.
+    if ((!existing.quantity || existing.quantity === 0) && item.quantity) {
+      existing.quantity = item.quantity;
+    }
+    if ((!existing.price || existing.price === 0) && item.price) {
+      existing.price = item.price;
+    }
+    if (
+      (!existing.purchasePrice || existing.purchasePrice === 0) &&
+      item.purchasePrice
+    ) {
+      existing.purchasePrice = item.purchasePrice;
+    }
+    if (
+      (!existing.unit || existing.unit === "pieces") &&
+      item.unit &&
+      item.unit !== "pieces"
+    ) {
+      existing.unit = item.unit;
+    }
   }
-  return merged;
+  return Array.from(byName.values());
 }
 
 function busyRecordName(row: Record<string, unknown>): string {
@@ -428,9 +590,7 @@ function extractBusyMastersFromTree(root: unknown): {
       const purchasePrice = numOf(
         row.PurchasePrice ?? row.PURCHASEPRICE ?? row.CostPrice ?? row.COSTPRICE,
       );
-      const qty = numOf(
-        row.OpeningQty ?? row.OPENINGQTY ?? row.Stock ?? row.STOCK ?? row.Qty,
-      );
+      const qty = busyItemQuantity(row);
       const unit = busyItemUnit(row);
       const isItemLike =
         salePrice > 0 ||
@@ -476,13 +636,66 @@ function extractBusyMastersFromTree(root: unknown): {
   return { parties, items };
 }
 
-export function parseBusyXml(xml: string): ParsedImportData {
-  const parser = new XMLParser(XML_PARSER_OPTIONS);
+function busyAddressFields(row: Record<string, unknown>): {
+  address1: string;
+  address2: string;
+  address3: string;
+  state: string;
+  city: string;
+  phone: string;
+  mobile: string;
+  email: string;
+  gstin: string;
+  pan: string;
+} {
+  const addr =
+    row.Address && typeof row.Address === "object"
+      ? (row.Address as Record<string, unknown>)
+      : row;
+  return {
+    address1: textOf(addr.Address1 ?? row.Address1 ?? row.ADDRESS),
+    address2: textOf(addr.Address2 ?? row.Address2),
+    address3: textOf(addr.Address3 ?? row.Address3),
+    state: textOf(addr.StateName ?? row.StateName ?? row.tmpStateName),
+    city: textOf(addr.CityName ?? row.CityName),
+    phone: textOf(row.Phone ?? row.Mobile ?? addr.Mobile ?? row.MOBILE),
+    mobile: textOf(row.Mobile ?? row.WhatsAppNo ?? addr.Mobile),
+    email: textOf(row.Email ?? addr.Email),
+    gstin: textOf(row.GSTNo ?? addr.GSTNo),
+    pan: textOf(row.ITPAN ?? addr.ITPAN),
+  };
+}
 
-  const root = parser.parse(xml);
+function extractBusyAccountGroups(root: unknown): ImportAccountGroupRow[] {
+  const groups: ImportAccountGroupRow[] = [];
+  const rows: Record<string, unknown>[] = [];
+  walkNodes(root, "AccountGroup", rows);
+  walkNodes(root, "ACCOUNTGROUP", rows);
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const name = textOf(row.Name ?? row.NAME);
+    if (!name) continue;
+    const parentName = textOf(row.ParentGroupName ?? row.ParentGroup) || undefined;
+    const key = `${parentName ?? ""}:${name}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    groups.push({
+      name,
+      parentName,
+      externalCode: textOf(row.tmpCode ?? row.Code) || undefined,
+      isPrimary:
+        textOf(row.PrimaryGroup).toLowerCase() === "true" || !parentName,
+    });
+  }
+  return groups;
+}
+
+function extractBusyLedgersAndParties(root: unknown): {
+  ledgers: ImportLedgerRow[];
+  parties: ImportPartyRow[];
+} {
   const accounts: Record<string, unknown>[] = [];
-  const products: Record<string, unknown>[] = [];
-  const accountTags = [
+  for (const tag of [
     "Account",
     "ACCOUNT",
     "AccountMaster",
@@ -490,9 +703,99 @@ export function parseBusyXml(xml: string): ParsedImportData {
     "AccMaster",
     "Ledger",
     "LEDGER",
-    "Party",
-    "PARTY",
-  ];
+  ]) {
+    walkNodes(root, tag, accounts);
+  }
+
+  const ledgers: ImportLedgerRow[] = [];
+  const parties: ImportPartyRow[] = [];
+  const seenLedger = new Set<string>();
+  const seenParty = new Set<string>();
+
+  for (const row of accounts) {
+    const name = busyRecordName(row);
+    if (!name) continue;
+
+    const group = busyRecordGroup(row);
+    if (!group && !row.ParentGroup && !row.OPBal) {
+      // Likely nested non-account node
+      continue;
+    }
+    const groupName = group || textOf(row.ParentGroup) || "Primary";
+    const accountKind = classifyAccountGroup(groupName);
+    const opening = numOf(
+      row.OPBal ??
+        row.OpeningBalance ??
+        row.OPENINGBALANCE ??
+        row.OpBal ??
+        row.OPBAL ??
+        row.PYBal,
+    );
+    const contact = busyAddressFields(row);
+    const externalCode = textOf(row.tmpCode ?? row.TmpMasterCode ?? row.Code);
+    const key = `${accountKind}:${name}`.toLowerCase();
+    if (!seenLedger.has(key)) {
+      seenLedger.add(key);
+      ledgers.push({
+        name,
+        printName: textOf(row.PrintName) || name,
+        groupName,
+        accountKind,
+        openingBalance: opening,
+        phone: contact.phone,
+        mobile: contact.mobile,
+        email: contact.email,
+        address1: contact.address1,
+        address2: contact.address2,
+        address3: contact.address3,
+        gstin: contact.gstin,
+        pan: contact.pan,
+        state: contact.state,
+        city: contact.city,
+        creditDays: (() => {
+          const d = numOf(row.CreditDaysForSale);
+          return d > 0 ? Math.round(d) : undefined;
+        })(),
+        externalCode: externalCode || undefined,
+        sourceSystem: "busy",
+      });
+    }
+
+    const partyType =
+      partyTypeFromAccountKind(accountKind) ?? busyPartyType(groupName);
+    if (partyType && !isCashPartyAlias(name)) {
+      const pkey = `${partyType}:${name}`.toLowerCase();
+      if (!seenParty.has(pkey)) {
+        seenParty.add(pkey);
+        const address = [contact.address1, contact.address2, contact.address3]
+          .filter(Boolean)
+          .join(", ");
+        parties.push({
+          name,
+          phone: contact.phone || contact.mobile,
+          address,
+          openingBalance: -opening,
+          partyType,
+          gstin: contact.gstin,
+          pan: contact.pan,
+          state: contact.state,
+          city: contact.city,
+          email: contact.email,
+          mobile: contact.mobile,
+          externalCode: externalCode || undefined,
+        });
+      }
+    }
+  }
+
+  return { ledgers, parties };
+}
+
+export function parseBusyXml(xml: string): ParsedImportData {
+  const parser = new XMLParser(XML_PARSER_OPTIONS);
+
+  const root = parser.parse(xml);
+  const products: Record<string, unknown>[] = [];
   const productTags = [
     "Item",
     "ITEM",
@@ -506,42 +809,31 @@ export function parseBusyXml(xml: string): ParsedImportData {
     "INVENTORYITEM",
   ];
 
-  for (const tag of accountTags) walkNodes(root, tag, accounts);
   for (const tag of productTags) walkNodes(root, tag, products);
 
-  const parties: ImportPartyRow[] = [];
-  for (const row of accounts) {
-    const name = busyRecordName(row);
-    if (!name) continue;
-
-    const group = busyRecordGroup(row);
-    const partyType = busyPartyType(group);
-    if (!partyType) continue;
-
-    const opening = numOf(
-      row.OpeningBalance ?? row.OPENINGBALANCE ?? row.OpBal ?? row.OPBAL,
-    );
-    parties.push({
-      name,
-      phone: textOf(row.Phone ?? row.MOBILE ?? row.Telephone),
-      address: textOf(row.Address ?? row.ADDRESS),
-      openingBalance: -opening,
-      partyType,
-    });
-  }
+  const accountGroups = extractBusyAccountGroups(root);
+  const { ledgers, parties } = extractBusyLedgersAndParties(root);
 
   const items: ImportItemRow[] = [];
+  const seenItem = new Set<string>();
   for (const row of products) {
     const name = busyRecordName(row);
     if (!name) continue;
+    const key = name.toLowerCase();
+    if (seenItem.has(key)) continue;
+    seenItem.add(key);
 
     items.push({
       name,
       categoryName: busyRecordGroup(row) || "Imported",
       price: numOf(row.SalePrice ?? row.MRP ?? row.Rate ?? row.PRICE),
       purchasePrice: numOf(row.PurchasePrice ?? row.CostPrice ?? row.PURPRICE),
-      quantity: numOf(row.OpeningQty ?? row.OPENINGQTY ?? row.Stock),
+      quantity: busyItemQuantity(row),
       unit: busyItemUnit(row),
+      altUnit: textOf(row.AltUnit ?? row.ALTUNIT) || undefined,
+      mrp: numOf(row.MRP) || undefined,
+      hsnCode: textOf(row.HSNCode ?? row.HSNCODE) || undefined,
+      externalCode: textOf(row.tmpCode ?? row.TmpMasterCode) || undefined,
     });
   }
 
@@ -552,6 +844,8 @@ export function parseBusyXml(xml: string): ParsedImportData {
 
   return {
     source: "busy",
+    accountGroups,
+    ledgers,
     parties: mergedParties,
     items: mergedItems,
     bills,
@@ -562,8 +856,19 @@ export function parseBusyXml(xml: string): ParsedImportData {
 export function parseCsvFile(csv: string): ParsedImportData {
   const masters = parseCsvMasters(csv);
   const vouchers = parseCsvVouchers(csv);
+  const ledgers: ImportLedgerRow[] = masters.parties.map((p) => ({
+    name: p.name,
+    groupName: p.partyType === "customer" ? "Sundry Debtors" : "Sundry Creditors",
+    accountKind: p.partyType === "customer" ? "receivable" : "payable",
+    openingBalance: p.openingBalance,
+    phone: p.phone,
+    address1: p.address,
+    sourceSystem: "csv",
+  }));
   return {
     source: "csv",
+    accountGroups: [],
+    ledgers,
     parties: masters.parties,
     items: masters.items,
     bills: vouchers.bills,

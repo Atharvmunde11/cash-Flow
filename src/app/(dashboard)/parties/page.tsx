@@ -56,6 +56,9 @@ async function fetchParties() {
 export default function PartiesPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"all" | "customer" | "supplier">(
+    "all",
+  );
   const [page, setPage] = useState(1);
   const router = useRouter();
   const qc = useQueryClient();
@@ -63,14 +66,15 @@ export default function PartiesPage() {
 
   const filteredParties = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return list.data ?? [];
     return (list.data ?? []).filter((party) => {
+      if (typeFilter !== "all" && party.partyType !== typeFilter) return false;
+      if (!query) return true;
       return [party.name, party.phone ?? "", party.partyType]
         .join(" ")
         .toLowerCase()
         .includes(query);
     });
-  }, [list.data, search]);
+  }, [list.data, search, typeFilter]);
 
   const pageSize = 12;
   const pageCount = Math.max(1, Math.ceil(filteredParties.length / pageSize));
@@ -124,9 +128,10 @@ export default function PartiesPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Customers</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Ledger</h1>
           <p className="text-sm text-muted-foreground">
-            Customers and suppliers with balances and ledger links.
+            Customers and suppliers with balances and ledger links. Walk-in
+            names from billing are saved automatically.
           </p>
         </div>
         <Button type="button" onClick={() => setDialogOpen(true)}>
@@ -217,13 +222,36 @@ export default function PartiesPage() {
         </Dialog>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        {(
+          [
+            { id: "all", label: "All" },
+            { id: "customer", label: "Customers" },
+            { id: "supplier", label: "Suppliers" },
+          ] as const
+        ).map((pill) => (
+          <Button
+            key={pill.id}
+            type="button"
+            size="sm"
+            variant={typeFilter === pill.id ? "default" : "outline"}
+            onClick={() => {
+              setTypeFilter(pill.id);
+              setPage(1);
+            }}
+          >
+            {pill.label}
+          </Button>
+        ))}
+      </div>
+
       <Input
         value={search}
         onChange={(e) => {
           setSearch(e.target.value);
           setPage(1);
         }}
-        placeholder="Search parties by name, phone, or type..."
+        placeholder="Search by name or phone..."
         className="max-w-sm"
       />
 

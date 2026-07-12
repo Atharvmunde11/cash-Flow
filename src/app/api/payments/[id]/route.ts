@@ -149,6 +149,12 @@ export async function PATCH(
     const nextDirection = (parsed.data.direction ?? row.direction) as
       | "received"
       | "paid";
+    if (nextDirection === "received" && nextParty.partyType !== "customer") {
+      return jsonError("Receipts can only be recorded for customers", 400);
+    }
+    if (nextDirection === "paid" && nextParty.partyType !== "supplier") {
+      return jsonError("Payments can only be recorded for suppliers", 400);
+    }
     const nextPaymentMode = parsed.data.paymentMode ?? row.paymentMode;
     const nextNotes = parsed.data.notes ?? row.notes ?? "";
 

@@ -1,13 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Download, Printer, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { sanitizeHtml } from "@/lib/sanitize";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -63,7 +62,7 @@ type LedgerResponse = {
     bills: Array<{
       _id: string;
       billNumber: string;
-      billKind: "sale" | "purchase";
+      billKind: "sale" | "purchase" | "sale_return" | "purchase_return";
       billDate: string;
       total: number;
       paidAmount: number;
@@ -98,7 +97,7 @@ type ActivityItem = {
   paymentMode: string;
   balanceAfter?: number | null;
   billNumber?: string;
-  billKind?: "sale" | "purchase";
+  billKind?: "sale" | "purchase" | "sale_return" | "purchase_return";
   debit?: number;
   credit?: number;
 };
@@ -121,9 +120,18 @@ async function fetchBusinessName() {
 }
 
 export default function PartyLedgerPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
+      <PartyLedgerPageInner />
+    </Suspense>
+  );
+}
+
+function PartyLedgerPageInner() {
   const qc = useQueryClient();
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const id = String(params.id);
   const [activityFilter, setActivityFilter] = useState<
     "all" | "payments" | "bills"
@@ -138,6 +146,14 @@ export default function PartyLedgerPage() {
     queryKey: ["ledger", id],
     queryFn: () => fetchLedger(id),
   });
+
+  useEffect(() => {
+    if (searchParams.get("print") !== "statement") return;
+    if (!q.isSuccess) return;
+    setPrintMode("all");
+    const t = window.setTimeout(() => window.print(), 150);
+    return () => window.clearTimeout(t);
+  }, [searchParams, q.isSuccess]);
 
   const businessQ = useQuery({
     queryKey: ["business-profile"],
@@ -216,6 +232,10 @@ export default function PartyLedgerPage() {
           transaction.refType !== "bill_payment" &&
           transaction.refType !== "purchase_invoice" &&
           transaction.refType !== "purchase_payment" &&
+          transaction.refType !== "sale_return" &&
+          transaction.refType !== "sale_return_payment" &&
+          transaction.refType !== "purchase_return" &&
+          transaction.refType !== "purchase_return_payment" &&
           !matchesBillNote &&
           !matchesPayment
         );
@@ -256,7 +276,36 @@ export default function PartyLedgerPage() {
 
     bills.forEach((bill) => {
       const paid = bill.paidAmount ?? 0;
-      const due = Math.max(0, (bill.total ?? 0) - paid);
+      const total = bill.total ?? 0;
+      const due = Math.max(0, total - paid);
+      const billId = bill._id;
+
+      let debit = 0;
+      let credit = 0;
+      if (bill.billKind === "sale_return") {
+        // Credit note to customer: show return as credit, refund as debit.
+        credit = total;
+        debit = paid;
+      } else if (bill.billKind === "purchase_return") {
+        debit = total;
+        credit = paid;
+      } else if (isSupplier) {
+        debit = paid;
+        credit = due;
+      } else {
+        debit = due;
+        credit = paid;
+      }
+
+      const related = transactions
+        .filter((transaction) => transaction.billId === billId)
+        .sort(
+          (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+        );
+      const balanceAfter =
+        related.length > 0
+          ? (related[related.length - 1]?.balanceAfterParty ?? null)
+          : null;
 
       out.push({
         id: bill._id,
@@ -266,8 +315,9 @@ export default function PartyLedgerPage() {
         paymentMode: bill.paymentMode,
         billNumber: bill.billNumber,
         billKind: bill.billKind,
-        debit: isSupplier ? paid : due,
-        credit: isSupplier ? due : paid,
+        balanceAfter,
+        debit,
+        credit,
       });
     });
 
@@ -463,145 +513,147 @@ export default function PartyLedgerPage() {
           </div>
         </div>
 
-        <Card>
-          <CardHeader>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <CardTitle>Activity</CardTitle>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={activityFilter === "all" ? "default" : "outline"}
-                  onClick={() => {
-                    setActivityFilter("all");
-                    setPage(1);
-                  }}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-sm font-medium text-muted-foreground">Activity</h2>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={activityFilter === "all" ? "default" : "outline"}
+              onClick={() => {
+                setActivityFilter("all");
+                setPage(1);
+              }}
+            >
+              All
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={activityFilter === "payments" ? "default" : "outline"}
+              onClick={() => {
+                setActivityFilter("payments");
+                setPage(1);
+              }}
+            >
+              Payments
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={activityFilter === "bills" ? "default" : "outline"}
+              onClick={() => {
+                setActivityFilter("bills");
+                setPage(1);
+              }}
+            >
+              Bills
+            </Button>
+          </div>
+        </div>
+
+        <div className="rounded-xl border overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/40">
+                <TableHead>Date</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Mode</TableHead>
+                <TableHead className="text-right">Debit</TableHead>
+                <TableHead className="text-right">Credit</TableHead>
+                <TableHead className="text-right">Balance After</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {paginatedActivity.map((item) => (
+                <TableRow
+                  key={`${item.type}-${item.id}`}
+                  className="hover:bg-muted/30 transition-colors"
                 >
-                  All
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={
-                    activityFilter === "payments" ? "default" : "outline"
-                  }
-                  onClick={() => {
-                    setActivityFilter("payments");
-                    setPage(1);
-                  }}
-                >
-                  Payments
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={activityFilter === "bills" ? "default" : "outline"}
-                  onClick={() => {
-                    setActivityFilter("bills");
-                    setPage(1);
-                  }}
-                >
-                  Bills
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="rounded-xl border p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Mode</TableHead>
-                  <TableHead className="text-right">Debit</TableHead>
-                  <TableHead className="text-right">Credit</TableHead>
-                  <TableHead className="text-right">Balance After</TableHead>
+                  <TableCell className="text-sm text-muted-foreground tabular-nums">
+                    {item.date.toLocaleString()}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline">
+                      {item.type === "bill"
+                        ? `${item.billKind} bill`
+                        : item.type === "payment"
+                          ? "Payment"
+                          : "Transaction"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="max-w-50 truncate font-medium">
+                    {item.type === "bill" && item.billNumber ? (
+                      <Link
+                        href={`/billing?billId=${item.id}`}
+                        className="font-mono text-xs text-foreground hover:underline underline-offset-4"
+                      >
+                        {item.billNumber}
+                      </Link>
+                    ) : (
+                      item.description
+                    )}
+                  </TableCell>
+                  <TableCell className="capitalize text-sm">
+                    {item.paymentMode}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {item.debit != null && item.debit > 0 ? (
+                      <span
+                        className={
+                          isSupplier ? "text-green-600" : "text-red-600"
+                        }
+                      >
+                        {formatMoney(item.debit)}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {item.credit != null && item.credit > 0 ? (
+                      <span
+                        className={
+                          isSupplier ? "text-red-600" : "text-green-600"
+                        }
+                      >
+                        {formatMoney(item.credit)}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right text-muted-foreground tabular-nums">
+                    {item.balanceAfter != null
+                      ? formatMoney(item.balanceAfter)
+                      : "-"}
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {paginatedActivity.map((item) => (
-                  <TableRow key={`${item.type}-${item.id}`}>
-                    <TableCell>{item.date.toLocaleString()}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">
-                        {item.type === "bill"
-                          ? `${item.billKind} bill`
-                          : item.type === "payment"
-                            ? "Payment"
-                            : "Transaction"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="max-w-50 truncate">
-                      {item.type === "bill" && item.billNumber ? (
-                        <Link
-                          href={`/billing?billId=${item.id}`}
-                          className="font-mono text-xs text-gray-600 hover:text-gray-800 hover:underline"
-                        >
-                          {item.billNumber}
-                        </Link>
-                      ) : (
-                        item.description
-                      )}
-                    </TableCell>
-                    <TableCell>{item.paymentMode}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {item.debit != null && item.debit > 0 ? (
-                        <span
-                          className={
-                            isSupplier ? "text-green-600" : "text-red-600"
-                          }
-                        >
-                          {formatMoney(item.debit)}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {item.credit != null && item.credit > 0 ? (
-                        <span
-                          className={
-                            isSupplier ? "text-red-600" : "text-green-600"
-                          }
-                        >
-                          {formatMoney(item.credit)}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right text-muted-foreground">
-                      {item.balanceAfter != null
-                        ? formatMoney(item.balanceAfter)
-                        : "-"}
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {paginatedActivity.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={7}
-                      className="py-10 text-center text-muted-foreground"
-                    >
-                      No{" "}
-                      {activityFilter === "all" ? "activity" : activityFilter}{" "}
-                      found.
-                    </TableCell>
-                  </TableRow>
-                ) : null}
-              </TableBody>
-            </Table>
-            <PaginationControls
-              page={page}
-              pageCount={pageCount}
-              pageSize={pageSize}
-              totalItems={filteredActivity.length}
-              itemLabel="entries"
-              onPageChange={setPage}
-            />
-          </CardContent>
-        </Card>
+              ))}
+              {paginatedActivity.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={7}
+                    className="py-10 text-center text-muted-foreground"
+                  >
+                    No{" "}
+                    {activityFilter === "all" ? "activity" : activityFilter}{" "}
+                    found.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+          <PaginationControls
+            page={page}
+            pageCount={pageCount}
+            pageSize={pageSize}
+            totalItems={filteredActivity.length}
+            itemLabel="entries"
+            onPageChange={setPage}
+          />
+        </div>
       </div>
 
       <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>

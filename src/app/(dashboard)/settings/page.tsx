@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useEffect, useState } from "react";
 import { ImportPanel } from "@/components/import/import-panel";
 import { AppUpdatePanel } from "@/components/settings/app-update-panel";
+import { CustomSundrySettingsPanel } from "@/components/forms/sundry-combobox";
 
 type BusinessProfile = { name: string; address: string; phone: string };
 
@@ -121,6 +122,16 @@ export default function SettingsPage() {
       </div>
 
       <AppUpdatePanel />
+
+      <CustomSundrySettingsPanel />
+
+      <p className="text-sm text-muted-foreground">
+        Tip: you can also manage these under{" "}
+        <a href="/sundries" className="underline underline-offset-2">
+          Stock → Sundries
+        </a>
+        .
+      </p>
 
       <div className="rounded-xl border p-4 space-y-5">
         <div>

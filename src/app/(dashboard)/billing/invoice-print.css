@@ -70,6 +70,45 @@
     print-color-adjust: exact !important;
   }
 
+  /* Full printable page: push sundry/total toward the bottom */
+  .inv-sheet {
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: calc(100vh - 4mm) !important;
+    width: 100% !important;
+  }
+
+  .inv-sheet-top {
+    display: flex !important;
+    flex-direction: column !important;
+    flex: 1 1 auto !important;
+  }
+
+  .inv-sheet-bottom {
+    margin-top: auto !important;
+  }
+
+  .inv-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    margin: 0 auto 0 !important;
+    font-size: 10pt !important;
+    table-layout: fixed !important;
+    border: 1pt solid #cfcfcf !important;
+    height: 100% !important;
+  }
+
+  .inv-tr-spacer td {
+    height: 100% !important;
+    border: none !important;
+    padding: 0 !important;
+    background: transparent !important;
+  }
+
+  .inv-tr-spacer {
+    border: none !important;
+  }
+
   /* Make sure the print content starts at top and stays centered */
   #invoice-print-root {
     margin-left: auto !important;
@@ -205,15 +244,6 @@
   }
 
   /* ── Line items table ────────────────────────────────────────────────────── */
-  .inv-table {
-    width: 100% !important;
-    border-collapse: collapse !important;
-    margin: 0 auto 0 !important;
-    font-size: 10pt !important;
-    table-layout: fixed !important;
-    border: 1pt solid #cfcfcf !important;
-  }
-
   /* Hide thead labels row to remove the black “labels” strip */
   .inv-table thead {
     display: table-header-group !important;

@@ -34,7 +34,7 @@ type Item = {
 type UsePrintInvoiceParams = {
   /** The billing form values (from react-hook-form watch) */
   formValues: {
-    billKind: "sale" | "purchase";
+    billKind: "sale" | "purchase" | "sale_return" | "purchase_return";
     billDate: Date;
     displayName: string;
     paymentMode?: string;
@@ -114,7 +114,14 @@ export function usePrintInvoice({
     };
 
     return {
-      title: formValues.billKind === "purchase" ? "PURCHASE BILL" : "INVOICE",
+      title:
+        formValues.billKind === "purchase"
+          ? "PURCHASE BILL"
+          : formValues.billKind === "sale_return"
+            ? "SALE RETURN"
+            : formValues.billKind === "purchase_return"
+              ? "PURCHASE RETURN"
+              : "INVOICE",
       invoiceNumber,
       invoiceDate: formValues.billDate,
       company,

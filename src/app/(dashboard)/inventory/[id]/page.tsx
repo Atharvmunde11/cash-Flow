@@ -96,24 +96,40 @@ export default function ItemDetailPage() {
   const usageBills = useQuery({
     queryKey: ["item-bills", id],
     queryFn: async () => {
-      const res = await fetch(`/api/bills?itemId=${id}`);
+      const res = await fetch(`/api/bills?itemId=${id}&pageSize=100`);
       if (!res.ok) throw new Error("Failed");
       const json = (await res.json()) as {
-        data: Array<{
-          _id: string;
-          billNumber: string;
-          billKind?: "sale" | "purchase";
-          displayName?: string;
-          total: number;
-          billDate?: string;
-          createdAt: string;
-          lines?: Array<{
-            itemId: any;
-            quantity: number;
-          }>;
-        }>;
+        data:
+          | Array<{
+              _id: string;
+              billNumber: string;
+              billKind?: "sale" | "purchase";
+              displayName?: string;
+              total: number;
+              billDate?: string;
+              createdAt: string;
+              lines?: Array<{
+                itemId: any;
+                quantity: number;
+              }>;
+            }>
+          | {
+              items: Array<{
+                _id: string;
+                billNumber: string;
+                billKind?: "sale" | "purchase";
+                displayName?: string;
+                total: number;
+                billDate?: string;
+                createdAt: string;
+                lines?: Array<{
+                  itemId: any;
+                  quantity: number;
+                }>;
+              }>;
+            };
       };
-      return json.data;
+      return Array.isArray(json.data) ? json.data : json.data.items;
     },
   });
 

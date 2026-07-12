@@ -17,6 +17,15 @@ type UpdateStatus =
 
 const RELEASES_URL = "https://github.com/Atharvmunde11/cash-Flow/releases";
 
+function friendlyUpdateError(message?: string) {
+  if (!message) return "Update check failed.";
+  if (message.includes("latest.yml") || message.includes("latest-arm64.yml")) {
+    return message;
+  }
+  const firstLine = message.split("\n")[0]?.trim() ?? message;
+  return firstLine.length > 240 ? `${firstLine.slice(0, 237)}…` : firstLine;
+}
+
 export function AppUpdatePanel() {
   const [isDesktop, setIsDesktop] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
@@ -94,7 +103,7 @@ export function AppUpdatePanel() {
       case "downloaded":
         return `Version ${updateStatus.version ?? "new"} is ready to install.`;
       case "error":
-        return updateStatus.message ?? "Update check failed.";
+        return friendlyUpdateError(updateStatus.message);
       case "dev":
         return updateStatus.message ?? "Updates run in the installed app only.";
       default:

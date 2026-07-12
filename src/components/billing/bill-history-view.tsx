@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { toast } from "sonner";
@@ -54,6 +54,7 @@ import { ItemCombobox } from "@/components/forms/item-combobox";
 import { useRouter } from "next/navigation";
 import { EmptyState } from "@/components/shared/empty-state";
 import { BillHistorySkeleton } from "@/components/billing/bill-history-skeleton";
+import { PaginationControls } from "@/components/shared/pagination-controls";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -69,18 +70,28 @@ type BillLine = {
 type Bill = {
   _id: string;
   billNumber: string;
-  billKind: "sale" | "purchase";
+  billKind: "sale" | "purchase" | "sale_return" | "purchase_return";
   displayName?: string;
   partyId?: string;
   total: number;
   paidAmount: number;
   creditAmount: number;
-  paymentMode: "cash" | "upi" | "credit" | "mixed";
+  paymentMode: "cash" | "upi" | "credit" | "mixed" | "bank";
   billDate: string;
   createdAt: string;
   notes?: string;
   lines: BillLine[];
   profit?: number;
+};
+
+type BillKind = Bill["billKind"];
+
+type BillsPage = {
+  items: Bill[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
 };
 
 type EditLine = {
@@ -99,16 +110,25 @@ type SundryLine = {
 
 // ─── API helpers ───────────────────────────────────────────────────────────────
 
-async function fetchBillsByDate(
-  date: string,
-  billKind: "sale" | "purchase",
-): Promise<Bill[]> {
-  const res = await fetch(
-    `/api/bills?date=${encodeURIComponent(date)}&billKind=${billKind}`,
-  );
+async function fetchBillsPage(params: {
+  billKind: BillKind;
+  page: number;
+  pageSize: number;
+  q?: string;
+  date?: string | null;
+}): Promise<BillsPage> {
+  const sp = new URLSearchParams({
+    billKind: params.billKind,
+    page: String(params.page),
+    pageSize: String(params.pageSize),
+  });
+  if (params.q?.trim()) sp.set("q", params.q.trim());
+  if (params.date) sp.set("date", params.date);
+
+  const res = await fetch(`/api/bills?${sp.toString()}`);
   if (!res.ok) throw new Error("Failed to fetch bills");
-  const json = await res.json();
-  return (json.data as Bill[]).filter((b) => b.billKind === billKind);
+  const json = (await res.json()) as { data: BillsPage };
+  return json.data;
 }
 
 async function updateBill(id: string, patch: Record<string, unknown>) {
@@ -168,42 +188,79 @@ function computeBillProfit(b: Bill): number {
 const HISTORY_COPY = {
   sale: {
     title: "Invoice History",
-    description: "View and open sales invoices for the selected date.",
+    description: "All sales invoices, newest first. Filter by date or customer.",
     filterPlaceholder: "Filter by customer name…",
-    emptyTitle: "No invoices on this date",
-    emptyDescription: (date: string) =>
-      `No sales invoices were recorded on ${date}. Create one from New Invoice or pick another day.`,
+    emptyTitle: "No invoices yet",
+    emptyDescription: () =>
+      "No sales invoices found. Create one from New Invoice.",
     emptyAction: { label: "New invoice", href: "/billing" },
     partyFallback: "Walk-in customer",
     showProfit: true,
     icon: FileSpreadsheet,
+    itemLabel: "invoices",
   },
   purchase: {
     title: "Purchase History",
-    description: "View and open purchase bills for the selected date.",
+    description: "All purchase bills, newest first. Filter by date or supplier.",
     filterPlaceholder: "Filter by supplier name…",
-    emptyTitle: "No purchase bills on this date",
-    emptyDescription: (date: string) =>
-      `No purchase bills were recorded on ${date}. Record a purchase or pick another day.`,
+    emptyTitle: "No purchase bills yet",
+    emptyDescription: () =>
+      "No purchase bills found. Record a purchase to get started.",
     emptyAction: { label: "New purchase", href: "/billing?kind=purchase" },
     partyFallback: "No supplier",
     showProfit: false,
     icon: Receipt,
+    itemLabel: "purchases",
+  },
+  sale_return: {
+    title: "Sale Return History",
+    description: "All sale returns, newest first. Filter by date or customer.",
+    filterPlaceholder: "Filter by customer name…",
+    emptyTitle: "No sale returns yet",
+    emptyDescription: () =>
+      "No sale returns found. Create one to get started.",
+    emptyAction: {
+      label: "New sale return",
+      href: "/billing?kind=sale_return",
+    },
+    partyFallback: "Walk-in customer",
+    showProfit: false,
+    icon: FileSpreadsheet,
+    itemLabel: "sale returns",
+  },
+  purchase_return: {
+    title: "Purchase Return History",
+    description:
+      "All purchase returns, newest first. Filter by date or supplier.",
+    filterPlaceholder: "Filter by supplier name…",
+    emptyTitle: "No purchase returns yet",
+    emptyDescription: () =>
+      "No purchase returns found. Create one to get started.",
+    emptyAction: {
+      label: "New purchase return",
+      href: "/billing?kind=purchase_return",
+    },
+    partyFallback: "No supplier",
+    showProfit: false,
+    icon: Receipt,
+    itemLabel: "purchase returns",
   },
 } as const;
 
 export function BillHistoryView({
   billKind,
 }: {
-  billKind: "sale" | "purchase";
+  billKind: BillKind;
 }) {
   const copy = HISTORY_COPY[billKind];
   const qc = useQueryClient();
   const router = useRouter();
 
   // ── Filters
-  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [dateFilter, setDateFilter] = useState<string | null>(null);
   const [nameFilter, setNameFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
   // ── Modals
   const [editBill, setEditBill] = useState<Bill | null>(null);
@@ -217,33 +274,39 @@ export function BillHistoryView({
   const [editDate, setEditDate] = useState("");
   const [editNotes, setEditNotes] = useState("");
 
-  const dateStr = format(selectedDate, "yyyy-MM-dd");
-
   const bills = useQuery({
-    queryKey: ["bills", billKind, dateStr],
-    queryFn: () => fetchBillsByDate(dateStr, billKind),
+    queryKey: ["bills", billKind, page, pageSize, nameFilter, dateFilter],
+    queryFn: () =>
+      fetchBillsPage({
+        billKind,
+        page,
+        pageSize,
+        q: nameFilter,
+        date: dateFilter,
+      }),
   });
 
+  const rows = bills.data?.items ?? [];
+  const totalItems = bills.data?.total ?? 0;
+  const pageCount = bills.data?.pageCount ?? 1;
+
   const changeDay = (offset: number) => {
-    setSelectedDate((d) => new Date(d.getTime() + offset * 86_400_000));
+    setPage(1);
+    setDateFilter((prev) => {
+      const base = prev
+        ? new Date(`${prev}T12:00:00`)
+        : new Date();
+      const next = new Date(base.getTime() + offset * 86_400_000);
+      return format(next, "yyyy-MM-dd");
+    });
   };
 
-  // ── Filtered bills
-  const filtered = useMemo(() => {
-    if (!bills.data) return [];
-    const q = nameFilter.trim().toLowerCase();
-    if (!q) return bills.data;
-    return bills.data.filter((b) =>
-      (b.displayName ?? "walk-in").toLowerCase().includes(q),
-    );
-  }, [bills.data, nameFilter]);
-
-  // ── Footer totals
-  const totalSum = filtered.reduce((s, b) => s + b.total, 0);
-  const paidSum = filtered.reduce((s, b) => s + b.paidAmount, 0);
-  const creditSum = filtered.reduce((s, b) => s + b.creditAmount, 0);
+  // ── Footer totals (current page)
+  const totalSum = rows.reduce((s, b) => s + b.total, 0);
+  const paidSum = rows.reduce((s, b) => s + b.paidAmount, 0);
+  const creditSum = rows.reduce((s, b) => s + b.creditAmount, 0);
   const profitSum = copy.showProfit
-    ? filtered
+    ? rows
         .filter((b) => b.billKind === "sale")
         .reduce((s, b) => s + computeBillProfit(b), 0)
     : 0;
@@ -371,34 +434,61 @@ export function BillHistoryView({
             variant="outline"
             size="icon"
             onClick={() => changeDay(-1)}
+            title="Previous day"
           >
             <ChevronLeft className="size-4" />
           </Button>
           <Input
             type="date"
-            value={dateStr}
+            value={dateFilter ?? ""}
             onChange={(e) => {
-              if (e.target.value) {
-                setSelectedDate(new Date(`${e.target.value}T12:00:00`));
-              }
+              setPage(1);
+              setDateFilter(e.target.value || null);
             }}
             className="w-40"
+            title="Filter by date (leave empty for all history)"
           />
           <Button
             variant="outline"
             size="icon"
             onClick={() => changeDay(1)}
+            title="Next day"
           >
             <ChevronRight className="size-4" />
           </Button>
+          {dateFilter ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setPage(1);
+                setDateFilter(null);
+              }}
+            >
+              All dates
+            </Button>
+          ) : null}
         </div>
 
         <Input
           placeholder={copy.filterPlaceholder}
           value={nameFilter}
-          onChange={(e) => setNameFilter(e.target.value)}
+          onChange={(e) => {
+            setPage(1);
+            setNameFilter(e.target.value);
+          }}
           className="w-65"
         />
+
+        <Button
+          type="button"
+          className="ml-auto"
+          onClick={() => router.push(copy.emptyAction.href)}
+        >
+          <Plus className="mr-1 size-4" />
+          {copy.emptyAction.label}
+        </Button>
       </div>
 
       {bills.isLoading ? (
@@ -413,20 +503,20 @@ export function BillHistoryView({
             onClick: () => bills.refetch(),
           }}
         />
-      ) : filtered.length === 0 ? (
+      ) : rows.length === 0 ? (
         <EmptyState
           icon={copy.icon}
           title={
-            nameFilter
-              ? `No matches for "${nameFilter}"`
+            nameFilter || dateFilter
+              ? "No matching bills"
               : copy.emptyTitle
           }
           description={
-            nameFilter
-              ? `Try a different name or clear the filter for ${format(selectedDate, "dd MMM yyyy")}.`
-              : copy.emptyDescription(format(selectedDate, "dd MMM yyyy"))
+            nameFilter || dateFilter
+              ? "Try another date, clear filters, or create a new bill."
+              : copy.emptyDescription()
           }
-          action={nameFilter ? undefined : copy.emptyAction}
+          action={nameFilter || dateFilter ? undefined : copy.emptyAction}
         />
       ) : (
       <div className="rounded-xl border overflow-hidden">
@@ -448,7 +538,7 @@ export function BillHistoryView({
           </TableHeader>
 
           <TableBody>
-            {filtered.map((b) => (
+            {rows.map((b) => (
               <TableRow
                 key={b._id}
                 className="cursor-pointer hover:bg-muted/30 transition-colors"
@@ -541,14 +631,14 @@ export function BillHistoryView({
 
           </TableBody>
 
-          {filtered.length > 0 && (
+          {rows.length > 0 && (
             <tfoot className="border-t bg-muted/20 text-sm font-semibold">
               <tr>
                 <td
                   colSpan={3}
                   className="px-4 py-2 text-right text-xs text-muted-foreground font-normal"
                 >
-                  {filtered.length} bill{filtered.length !== 1 ? "s" : ""}
+                  Page total · {rows.length} bill{rows.length !== 1 ? "s" : ""}
                 </td>
                 <td className="px-4 py-2 text-right tabular-nums">
                   {formatMoney(totalSum)}
@@ -578,6 +668,14 @@ export function BillHistoryView({
             </tfoot>
           )}
         </Table>
+        <PaginationControls
+          page={page}
+          pageCount={pageCount}
+          pageSize={pageSize}
+          totalItems={totalItems}
+          itemLabel={copy.itemLabel}
+          onPageChange={setPage}
+        />
       </div>
       )}
 

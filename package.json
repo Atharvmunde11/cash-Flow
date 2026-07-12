@@ -1,6 +1,6 @@
 {
   "name": "cashflow",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "main": "electron/main.js",
   "description": "CashFlow - local-first billing and inventory for small businesses",
   "author": "Atharv Munde",
@@ -25,10 +25,12 @@
     "prepare-electron": "node electron/prepare-next.js",
     "electron-build:prep": "npm run clean:next && npm run build && npm run prepare-electron && node scripts/generate-icon-ico.js",
     "electron-build": "node scripts/electron-build-win.js",
-    "electron-build:x64": "npm run electron-build:prep && node scripts/electron-rebuild-standalone.js x64 && npx electron-builder --win --x64 && npm run rebuild-sqlite-for-node",
-    "electron-build:arm64": "npm run electron-build:prep && node scripts/electron-rebuild-standalone.js arm64 && npx electron-builder --win --arm64 && npm run rebuild-sqlite-for-node",
-    "electron-publish:x64": "npm run electron-build:prep && node scripts/electron-rebuild-standalone.js x64 && npx electron-builder --win --x64 --publish always && npm run rebuild-sqlite-for-node",
-    "electron-publish:arm64": "npm run electron-build:prep && node scripts/electron-rebuild-standalone.js arm64 && npx electron-builder --win --arm64 --publish always && npm run rebuild-sqlite-for-node"
+    "electron-build:x64": "npm run electron-build:prep && node scripts/electron-rebuild-standalone.js x64 && npx electron-builder --win --x64 && node scripts/preserve-update-manifest.js x64 && npm run rebuild-sqlite-for-node",
+    "electron-build:arm64": "npm run electron-build:prep && node scripts/electron-rebuild-standalone.js arm64 && npx electron-builder --win --arm64 && node scripts/preserve-update-manifest.js arm64 && npm run rebuild-sqlite-for-node",
+    "electron-publish": "node scripts/electron-publish.js",
+    "electron-publish:upload": "node scripts/electron-publish.js --upload-only",
+    "electron-publish:x64": "node scripts/electron-publish.js",
+    "electron-publish:arm64": "node scripts/electron-publish.js"
   },
   "build": {
     "appId": "com.cashflow.app",

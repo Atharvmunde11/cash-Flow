@@ -5,14 +5,16 @@ import { usePathname, useRouter } from "next/navigation";
 import { Dispatch, SetStateAction, useState } from "react";
 import {
   BanknoteIcon,
+  BookOpen,
+  CalendarDays,
   FileSpreadsheet,
   LayoutDashboard,
   Menu,
   Package,
   Receipt,
   Settings,
-  ShoppingCart,
   Users,
+  UserCog,
   Wallet,
   Landmark,
   FolderTree,
@@ -38,6 +40,7 @@ const sections: { title: string; links: NavItem[] }[] = [
     title: "Overview",
     links: [
       { href: "/", label: "Home", icon: LayoutDashboard, shortcut: "Ctrl+D" },
+      { href: "/daybook", label: "Daybook", icon: BookOpen },
     ],
   },
   {
@@ -57,6 +60,11 @@ const sections: { title: string; links: NavItem[] }[] = [
         shortcut: "Ctrl+H",
       },
       {
+        href: "/sale-returns",
+        label: "Sale Return History",
+        icon: History,
+      },
+      {
         href: "/credit",
         label: "Money Owed",
         icon: Wallet,
@@ -68,22 +76,26 @@ const sections: { title: string; links: NavItem[] }[] = [
     title: "Purchases",
     links: [
       {
-        href: "/billing?kind=purchase",
-        label: "New Purchase",
-        icon: ShoppingCart,
-        rememberPath: "billing",
-      },
-      {
         href: "/purchases",
         label: "Purchase History",
+        icon: Receipt,
+      },
+      {
+        href: "/purchase-returns",
+        label: "Purchase Return History",
         icon: Receipt,
       },
     ],
   },
   {
-    title: "Customers",
+    title: "Ledger",
     links: [
-      { href: "/parties", label: "Customers", icon: Users, shortcut: "Ctrl+P" },
+      { href: "/parties", label: "Ledger", icon: Users, shortcut: "Ctrl+P" },
+      {
+        href: "/receipts",
+        label: "Receipts",
+        icon: Receipt,
+      },
       {
         href: "/payments",
         label: "Payments",
@@ -107,6 +119,31 @@ const sections: { title: string; links: NavItem[] }[] = [
         label: "Categories",
         icon: FolderTree,
         shortcut: "Ctrl+K",
+      },
+      {
+        href: "/sundries",
+        label: "Sundries",
+        icon: Receipt,
+      },
+    ],
+  },
+  {
+    title: "Employee",
+    links: [
+      {
+        href: "/employees",
+        label: "Employees",
+        icon: UserCog,
+      },
+      {
+        href: "/attendance",
+        label: "Attendance",
+        icon: CalendarDays,
+      },
+      {
+        href: "/payrolls",
+        label: "Payrolls",
+        icon: BanknoteIcon,
       },
     ],
   },

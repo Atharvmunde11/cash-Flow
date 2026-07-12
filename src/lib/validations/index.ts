@@ -69,9 +69,18 @@ const billLineSchema = z.object({
   unitPrice: z.coerce.number().nonnegative().optional(),
 });
 
+const paymentSplitSchema = z.object({
+  method: z.enum(["cash", "upi", "bank"]),
+  amount: z.coerce.number().nonnegative(),
+  bankAccountId: z
+    .union([idString, z.literal(""), z.null()])
+    .optional()
+    .transform((v) => (v === "" || v === null ? undefined : v)),
+});
+
 export const billCreateSchema = z
   .object({
-    billKind: z.enum(["sale", "purchase"]),
+    billKind: z.enum(["sale", "purchase", "sale_return", "purchase_return"]),
     billDate: z.coerce.date(),
     // partyId is fully optional — walk-in customers don't need one
     partyId: z
@@ -87,10 +96,32 @@ export const billCreateSchema = z
       .union([idString, z.literal(""), z.null()])
       .optional()
       .transform((v) => (v === "" || v === null ? undefined : v)),
+    paymentSplits: z.array(paymentSplitSchema).optional().default([]),
     notes: z.string().max(2000).optional().default(""),
     allowNegativeStock: z.boolean().optional().default(false),
   })
   .strict();
+
+export const daybookExpenseSchema = z.object({
+  date: z.coerce.date(),
+  reason: z.string().trim().min(1, "Reason is required").max(200),
+  amount: z.coerce.number().positive("Amount must be greater than 0"),
+});
+
+export const daybookSaveSchema = z.object({
+  date: z.coerce.date(),
+  morningCash: z.coerce.number().nonnegative(),
+  notes: z.string().max(2000).optional().default(""),
+  expenses: z
+    .array(
+      z.object({
+        reason: z.string().trim().min(1).max(200),
+        amount: z.coerce.number().positive(),
+      }),
+    )
+    .optional()
+    .default([]),
+});
 
 export const paymentCreateSchema = z.object({
   partyId: idString,
@@ -115,6 +146,42 @@ export const bankAccountCreateSchema = z.object({
   notes: z.string().max(2000).optional().default(""),
 });
 
+export const employeeCreateSchema = z.object({
+  name: z.string().min(1, "Name is required").max(200),
+  phone: z.string().max(40).optional().default(""),
+  role: z.string().max(120).optional().default(""),
+  address: z.string().max(500).optional().default(""),
+  joinDate: z.coerce.date().optional(),
+  monthlySalary: z.coerce.number().nonnegative().optional().default(0),
+  payDay: z.coerce.number().int().min(1).max(28).optional().default(1),
+  isActive: z.boolean().optional().default(true),
+  notes: z.string().max(2000).optional().default(""),
+});
+
+export const employeeUpdateSchema = employeeCreateSchema.partial();
+
+export const employeeAttendanceSchema = z.object({
+  date: z.coerce.date(),
+  status: z.enum(["present", "absent", "half_day", "leave"]),
+  notes: z.string().max(500).optional().default(""),
+});
+
+export const employeeAdvanceSchema = z.object({
+  amount: z.coerce.number().positive("Amount must be greater than 0"),
+  date: z.coerce.date(),
+  notes: z.string().max(500).optional().default(""),
+});
+
+export const employeePayrollSchema = z.object({
+  periodStart: z.coerce.date(),
+  periodEnd: z.coerce.date(),
+  paidAt: z.coerce.date().optional(),
+  paymentMode: z.enum(["cash", "upi", "bank"]).optional().default("cash"),
+  notes: z.string().max(500).optional().default(""),
+  /** If omitted, uses employee.monthlySalary */
+  grossSalary: z.coerce.number().nonnegative().optional(),
+});
+
 export type PartyCreateInput = z.infer<typeof partyCreateSchema>;
 export type CategoryCreateInput = z.infer<typeof categoryCreateSchema>;
 export type TransactionCreateInput = z.infer<typeof transactionCreateSchema>;
@@ -122,3 +189,10 @@ export type BillCreateInput = z.infer<typeof billCreateSchema>;
 export type ItemCreateInput = z.infer<typeof itemCreateSchema>;
 export type PaymentCreateInput = z.infer<typeof paymentCreateSchema>;
 export type BankAccountCreateInput = z.infer<typeof bankAccountCreateSchema>;
+export type DaybookSaveInput = z.infer<typeof daybookSaveSchema>;
+export type DaybookExpenseInput = z.infer<typeof daybookExpenseSchema>;
+export type EmployeeCreateInput = z.infer<typeof employeeCreateSchema>;
+export type EmployeeUpdateInput = z.infer<typeof employeeUpdateSchema>;
+export type EmployeeAttendanceInput = z.infer<typeof employeeAttendanceSchema>;
+export type EmployeeAdvanceInput = z.infer<typeof employeeAdvanceSchema>;
+export type EmployeePayrollInput = z.infer<typeof employeePayrollSchema>;

@@ -4,7 +4,7 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import {
   Command,
   CommandEmpty,
@@ -35,6 +35,16 @@ async function searchParties(q: string, type?: "customer" | "supplier") {
   return json.data;
 }
 
+function isTypeToSearchKey(e: React.KeyboardEvent) {
+  return (
+    e.key.length === 1 &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    e.key !== " "
+  );
+}
+
 export function PartyCombobox(props: {
   value: string;
   onChange: (
@@ -61,26 +71,46 @@ export function PartyCombobox(props: {
     enabled: open,
   });
 
-  // 🔹 find selected party
   const selected = query.data?.find((p) => p._id === props.value);
-
-  // 🔹 display logic (supports free text)
   const display = selected?.name || props.value;
 
+  React.useEffect(() => {
+    if (!open) return;
+    const id = window.setTimeout(() => {
+      document
+        .querySelector<HTMLInputElement>('[data-slot="command-input"]')
+        ?.focus();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [open]);
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQ("");
+      }}
+    >
       <PopoverTrigger
         type="button"
         disabled={props.disabled}
         aria-expanded={open}
+        {...props.triggerProps}
         onKeyDown={(e) => {
           props.triggerProps?.onKeyDown?.(e);
+          if (e.defaultPrevented) return;
           if (e.key === "Shift") {
             e.preventDefault();
             if (!props.disabled) setOpen((v) => !v);
+            return;
+          }
+          if (!open && !props.disabled && isTypeToSearchKey(e)) {
+            e.preventDefault();
+            setQ(e.key);
+            setOpen(true);
           }
         }}
-        {...props.triggerProps}
         className={cn(
           buttonVariants({ variant: props.hideChevron ? "ghost" : "outline" }),
           "w-full font-normal",
@@ -109,8 +139,7 @@ export function PartyCombobox(props: {
               {query.isLoading ? "Loading…" : "No party found."}
             </CommandEmpty>
 
-            {/* 🔹 Free text option */}
-            {q && (
+            {q ? (
               <CommandItem
                 value={q}
                 onSelect={() => {
@@ -119,14 +148,14 @@ export function PartyCombobox(props: {
                     name: q,
                   });
                   setOpen(false);
+                  setQ("");
                 }}
               >
                 <Check className={cn("mr-2 size-4")} opacity={0} />
                 walk-in : {q}
               </CommandItem>
-            )}
+            ) : null}
 
-            {/* 🔹 Existing parties */}
             <CommandGroup>
               {query.data?.map((p) => (
                 <CommandItem
@@ -139,6 +168,7 @@ export function PartyCombobox(props: {
                       name: p.name,
                     });
                     setOpen(false);
+                    setQ("");
                   }}
                 >
                   <Check
@@ -149,17 +179,14 @@ export function PartyCombobox(props: {
                   />
 
                   <div className="flex w-full items-center justify-between gap-2">
-                    {/* Name */}
                     <span className="truncate">{p.name}</span>
-
-                    {/* Balance */}
                     <span
                       className={cn(
                         "text-xs font-medium tabular-nums",
                         p.balance && p.balance < 0
-                          ? "text-green-600" // they owe you → good
+                          ? "text-green-600"
                           : p.balance && p.balance > 0
-                            ? "text-red-600" // you owe → bad
+                            ? "text-red-600"
                             : "text-muted-foreground",
                       )}
                     >

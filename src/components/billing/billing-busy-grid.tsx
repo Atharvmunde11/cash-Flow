@@ -189,11 +189,11 @@ function ItemRow({
           value={line.itemId ?? ""}
           catalog={items}
           hideChevron
-          onChange={(id, item) => {
+          onChange={(id) => {
+            // Clear override so catalog price shows as the default.
             onUpdateItem(line.id, {
               itemId: id,
-              unitPrice:
-                item?.price !== undefined ? item.price : line.unitPrice,
+              unitPrice: undefined,
             });
           }}
           placeholder="Type or select item"
@@ -211,14 +211,15 @@ function ItemRow({
           step="0.01"
           min="0"
           value={line.quantity ?? ""}
-          onChange={(e) =>
+          onChange={(e) => {
+            const raw = e.target.value;
             onUpdateItem(line.id, {
               quantity:
-                e.target.value === ""
+                raw === "" || !Number.isFinite(Number(raw))
                   ? undefined
-                  : Number(e.target.value),
-            })
-          }
+                  : Number(raw),
+            });
+          }}
           className={cn(cellInput, "text-right tabular-nums")}
         />
       </GridCell>
@@ -234,16 +235,24 @@ function ItemRow({
           type="number"
           step="0.01"
           min="0"
-          placeholder={selectedItem ? String(selectedItem.price) : ""}
-          value={line.unitPrice ?? ""}
-          onChange={(e) =>
+          value={
+            line.unitPrice !== undefined
+              ? line.unitPrice
+              : (selectedItem?.price ?? "")
+          }
+          onFocus={(e) => {
+            // Typing replaces the whole default/catalog price (320 → 3).
+            e.target.select();
+          }}
+          onChange={(e) => {
+            const raw = e.target.value;
             onUpdateItem(line.id, {
               unitPrice:
-                e.target.value === ""
+                raw === "" || !Number.isFinite(Number(raw))
                   ? undefined
-                  : Number(e.target.value),
-            })
-          }
+                  : Number(raw),
+            });
+          }}
           className={cn(cellInput, "text-right tabular-nums")}
         />
       </GridCell>

@@ -1,6 +1,7 @@
 import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
 import { withMongoId, withMongoIds } from "@/lib/id-compat";
+import { linkBankToLedger } from "@/lib/ledger-accounts";
 import { bankAccountCreateSchema } from "@/lib/validations";
 
 export const runtime = "nodejs";
@@ -31,7 +32,9 @@ export async function POST(req: Request) {
     }
 
     const row = await db.bankAccount.create({ data: parsed.data });
-    return jsonOk(withMongoId(row));
+    await linkBankToLedger(row);
+    const withLedger = await db.bankAccount.findUnique({ where: { id: row.id } });
+    return jsonOk(withMongoId(withLedger ?? row));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);

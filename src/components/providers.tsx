@@ -12,11 +12,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 5 * 60_000,
+            staleTime: 30_000,
             gcTime: 30 * 60_000,
-            refetchOnWindowFocus: false,
-            refetchOnMount: false,
-            refetchOnReconnect: false,
+            // Always reload list/dashboard data when navigating back to a page.
+            refetchOnWindowFocus: true,
+            refetchOnMount: "always",
+            refetchOnReconnect: true,
             retry: 1,
           },
         },

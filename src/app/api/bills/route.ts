@@ -21,7 +21,12 @@ export async function GET(req: Request) {
     if (itemId && itemId.trim()) where.lines = { some: { itemId: itemId.trim() } };
 
     const kind = searchParams.get("billKind");
-    if (kind === "sale" || kind === "purchase") {
+    if (
+      kind === "sale" ||
+      kind === "purchase" ||
+      kind === "sale_return" ||
+      kind === "purchase_return"
+    ) {
       where.billKind = kind;
     }
 
@@ -52,10 +57,30 @@ export async function GET(req: Request) {
       }
     }
 
+    const pageRaw = Number.parseInt(searchParams.get("page") ?? "1", 10);
+    const pageSizeRaw = Number.parseInt(
+      searchParams.get("pageSize") ?? "20",
+      10,
+    );
+    const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+    const pageSize = Number.isFinite(pageSizeRaw)
+      ? Math.min(100, Math.max(1, pageSizeRaw))
+      : 20;
+
+    const q = searchParams.get("q")?.trim();
+    if (q) {
+      where.displayName = { contains: q };
+    }
+
+    const total = await db.bill.count({ where });
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, pageCount);
+
     const rows = await db.bill.findMany({
       where,
-      orderBy: { billDate: "desc" },
-      take: 500,
+      orderBy: [{ billDate: "desc" }, { createdAt: "desc" }],
+      skip: (safePage - 1) * pageSize,
+      take: pageSize,
       include: {
         lines: true,
         sundryCharges: true,
@@ -73,7 +98,13 @@ export async function GET(req: Request) {
       return { ...b, profit };
     });
 
-    return jsonOk(rowsWithProfit);
+    return jsonOk({
+      items: rowsWithProfit,
+      total,
+      page: safePage,
+      pageSize,
+      pageCount,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return jsonError(msg, 500);

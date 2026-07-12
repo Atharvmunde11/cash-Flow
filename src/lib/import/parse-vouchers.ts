@@ -1,4 +1,10 @@
 import {
+  isBankGroup,
+  isCashGroup,
+  isCashPartyAlias,
+  resolveGuestDisplayName,
+} from "@/lib/import/account-classify";
+import {
   absAmount,
   asArray,
   busyItemUnit,
@@ -12,6 +18,7 @@ import {
   walkNodes,
 } from "@/lib/import/parse-utils";
 import type {
+  ImportAccountLine,
   ImportBillRow,
   ImportPaymentRow,
   ImportSundryCharge,
@@ -301,14 +308,15 @@ function parseBusyTranTables(
     if (!action) return;
 
     const tran2Lines = tran2ByVch.get(vchCode) ?? [];
-    const partyName = resolveBusyPartyName(
+    const rawParty = resolveBusyPartyName(
       vchCode,
       header,
       billingByVch,
       masterMap,
       tran2Lines,
     );
-    if (!partyName) return;
+    if (!rawParty) return;
+    const guest = applyGuestParty(rawParty);
 
     const date = parseImportDate(header.Date ?? header.VCHDATE ?? header.VoucherDate);
     const externalNumber = sanitizeBillNumber(
@@ -335,13 +343,14 @@ function parseBusyTranTables(
       if (amount <= 0) return;
 
       payments.push({
-        partyName,
+        partyName: guest.partyName,
         direction: action === "receipt" ? "received" : "paid",
         amount,
         date,
-        paymentMode: inferBusyCashPaid(tran2Lines, masterMap) > 0 ? "cash" : "cash",
+        paymentMode: "cash",
         notes: notes || `Imported BUSY ${action} ${externalNumber}`,
         externalRef: externalNumber,
+        skipParty: guest.isGuest,
       });
       return;
     }
@@ -362,28 +371,136 @@ function parseBusyTranTables(
           footerTotal;
     if (total <= 0) return;
 
-    const paidAmount = Math.min(
+    const paidRaw = Math.min(
       total,
       absAmount(header.PaidAmount ?? header.CashAmount) ||
         inferBusyCashPaid(tran2Lines, masterMap),
     );
+    const payment = guest.isGuest
+      ? { paymentMode: "cash" as const, paidAmount: total }
+      : resolvePayment(total, paidRaw);
 
     bills.push({
       externalNumber,
       billKind: action,
       billDate: date,
-      partyName,
-      displayName: partyName,
+      partyName: guest.partyName,
+      displayName: guest.displayName,
+      isGuest: guest.isGuest,
       lines,
       sundryCharges: collectBusyTran2Sundries(tran2Lines, masterMap),
       total,
-      paidAmount,
-      paymentMode: resolvePaymentMode(total, paidAmount),
+      paidAmount: payment.paidAmount,
+      paymentMode: payment.paymentMode,
       notes: notes || `Imported from BUSY voucher ${externalNumber}`,
     });
   });
 
   return { bills, payments };
+}
+
+function collectAccDetails(
+  voucher: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const accEntries = voucher.AccEntries;
+  if (!accEntries || typeof accEntries !== "object") return [];
+  const details: Record<string, unknown>[] = [];
+  for (const row of asArray(
+    (accEntries as Record<string, unknown>).AccDetail,
+  )) {
+    if (row && typeof row === "object") {
+      details.push(row as Record<string, unknown>);
+    }
+  }
+  return details;
+}
+
+function busyAccLinesToImport(
+  details: Record<string, unknown>[],
+): ImportAccountLine[] {
+  const lines: ImportAccountLine[] = [];
+  details.forEach((detail, i) => {
+    const ledgerName = textOf(detail.AccountName ?? detail.ACCOUNTNAME);
+    const amount = absAmount(
+      detail.AmtMainCur ?? detail.CashFlow ?? detail.Amt ?? detail.Amount,
+    );
+    if (!ledgerName || amount <= 0) return;
+    const amountType = textOf(detail.AmountType);
+    // Busy AmountType: 1 = debit-ish / 2 = credit-ish depending on voucher; keep absolute + type
+    const entryType: "debit" | "credit" =
+      amountType === "2" ? "credit" : "debit";
+    lines.push({
+      ledgerName,
+      entryType,
+      amount,
+      groupName: textOf(detail.tmpGroupName ?? detail.Group),
+      srNo: numOf(detail.SrNo) || i + 1,
+    });
+  });
+  return lines;
+}
+
+function inferTenderFromAccDetails(details: Record<string, unknown>[]): {
+  paymentMode: "cash" | "bank" | "upi";
+  paidAmount: number;
+  bankLedgerName?: string;
+} {
+  let cashPaid = 0;
+  let bankPaid = 0;
+  let bankName = "";
+  for (const detail of details) {
+    const name = textOf(detail.AccountName ?? detail.ACCOUNTNAME);
+    const group = textOf(detail.tmpGroupName ?? detail.Group);
+    const amount = absAmount(
+      detail.AmtMainCur ?? detail.CashFlow ?? detail.Amt ?? detail.Amount,
+    );
+    if (!name || amount <= 0) continue;
+    if (isBankGroup(group) || (!group && /bank/i.test(name))) {
+      bankPaid += amount;
+      if (!bankName) bankName = name;
+    } else if (
+      isCashGroup(group) ||
+      isCashLedgerName(name) ||
+      isCashPartyAlias(name)
+    ) {
+      cashPaid += amount;
+    }
+  }
+  if (bankPaid > 0 && cashPaid > 0) {
+    return {
+      paymentMode: "bank",
+      paidAmount: bankPaid + cashPaid,
+      bankLedgerName: bankName || undefined,
+    };
+  }
+  if (bankPaid > 0) {
+    return {
+      paymentMode: "bank",
+      paidAmount: bankPaid,
+      bankLedgerName: bankName || undefined,
+    };
+  }
+  return { paymentMode: "cash", paidAmount: cashPaid };
+}
+
+function applyGuestParty(rawParty: string): {
+  partyName: string;
+  displayName: string;
+  isGuest: boolean;
+} {
+  const guest = resolveGuestDisplayName(rawParty);
+  if (guest.isGuest) {
+    return {
+      partyName: guest.displayName,
+      displayName: guest.displayName,
+      isGuest: true,
+    };
+  }
+  return {
+    partyName: guest.displayName,
+    displayName: guest.displayName,
+    isGuest: false,
+  };
 }
 
 function busyBillingParty(voucher: Record<string, unknown>): string {
@@ -452,22 +569,17 @@ function parseBusyAccVoucher(
     `P${index + 1}`,
   );
   const notes = textOf(voucher.Narration ?? voucher.ShortNar);
-
-  const accEntries = voucher.AccEntries;
-  if (!accEntries || typeof accEntries !== "object") return null;
-
-  const details: Record<string, unknown>[] = [];
-  for (const row of asArray(
-    (accEntries as Record<string, unknown>).AccDetail,
-  )) {
-    if (row && typeof row === "object") details.push(row as Record<string, unknown>);
-  }
+  const details = collectAccDetails(voucher);
+  const accountLines = busyAccLinesToImport(details);
+  const tender = inferTenderFromAccDetails(details);
 
   let partyName = "";
   let amount = 0;
+  let skipParty = false;
+
   for (const detail of details) {
     const name = textOf(detail.AccountName ?? detail.ACCOUNTNAME);
-    const group = textOf(detail.tmpGroupName ?? detail.Group).toLowerCase();
+    const group = textOf(detail.tmpGroupName ?? detail.Group);
     const lineAmount = absAmount(
       detail.CashFlow ?? detail.AmtMainCur ?? detail.Amt ?? detail.Amount,
     );
@@ -475,36 +587,64 @@ function parseBusyAccVoucher(
 
     if (
       isCashLedgerName(name) ||
-      group.includes("cash") ||
-      group.includes("bank")
+      isCashPartyAlias(name) ||
+      isCashGroup(group) ||
+      isBankGroup(group)
     ) {
       amount = Math.max(amount, lineAmount);
       continue;
     }
 
+    const gl = group.toLowerCase();
     if (
-      group.includes("debtor") ||
-      group.includes("creditor") ||
-      group.includes("sundry")
+      gl.includes("debtor") ||
+      gl.includes("creditor") ||
+      gl.includes("sundry")
     ) {
       partyName = name;
       amount = Math.max(amount, lineAmount);
     } else if (!partyName) {
+      // Expense / income ledger — keep as candidate; may become skipParty
       partyName = name;
       amount = Math.max(amount, lineAmount);
+      if (
+        gl.includes("expense") ||
+        gl.includes("income") ||
+        gl.includes("purchase") ||
+        gl.includes("sale")
+      ) {
+        skipParty = true;
+      }
     }
   }
 
-  if (!partyName || amount <= 0) return null;
+  if (amount <= 0) {
+    amount = tender.paidAmount;
+  }
+  if (amount <= 0) return null;
+
+  if (!partyName) {
+    skipParty = true;
+    partyName = "Guest";
+  } else if (isCashPartyAlias(partyName)) {
+    partyName = "Guest";
+    skipParty = true;
+  } else if (skipParty) {
+    // expense payment — no AR/AP party
+  }
 
   return {
     partyName,
     direction,
     amount,
     date,
-    paymentMode: "cash",
+    paymentMode: tender.paymentMode,
+    bankLedgerName: tender.bankLedgerName,
     notes: notes || `Imported BUSY ${direction} ${externalNumber}`,
     externalRef: externalNumber,
+    accountLines,
+    skipParty,
+    externalId: textOf(voucher.OriginalID) || undefined,
   };
 }
 
@@ -525,8 +665,9 @@ function parseBusyDocumentVouchers(
     [purchaseRows, "purchase"],
   ] as const) {
     rows.forEach((voucher, index) => {
-      const partyName = busyBillingParty(voucher);
-      if (!partyName) return;
+      const rawParty = busyBillingParty(voucher);
+      if (!rawParty) return;
+      const guest = applyGuestParty(rawParty);
 
       const date = parseImportDate(voucher.Date ?? voucher.VCHDATE);
       const externalNumber = sanitizeBillNumber(
@@ -535,6 +676,9 @@ function parseBusyDocumentVouchers(
       );
       const lines = collectBusyDocBillLines(voucher);
       const sundryCharges = collectBusyDocSundries(voucher);
+      const details = collectAccDetails(voucher);
+      const accountLines = busyAccLinesToImport(details);
+      const tender = inferTenderFromAccDetails(details);
       const inventoryTotal = lines.reduce(
         (sum, line) => sum + line.quantity * line.unitPrice,
         0,
@@ -545,18 +689,53 @@ function parseBusyDocumentVouchers(
         inventoryTotal + sundryTotal;
       if (total <= 0) return;
 
+      const paidAmount =
+        tender.paidAmount > 0 ? Math.min(total, tender.paidAmount) : total;
+      let paymentMode: ImportBillRow["paymentMode"] = tender.paymentMode;
+      if (paidAmount <= 0) paymentMode = "credit";
+      else if (paidAmount < total && tender.paidAmount > 0) paymentMode = "mixed";
+      else if (guest.isGuest || tender.paidAmount > 0) {
+        paymentMode = tender.paymentMode;
+      } else {
+        // No cash/bank AccEntry → credit sale
+        paymentMode = "credit";
+      }
+
+      // Guest / cash alias sales are treated as fully paid cash unless bank tender found
+      const finalPaid =
+        guest.isGuest && paidAmount <= 0
+          ? total
+          : guest.isGuest
+            ? total
+            : paymentMode === "credit"
+              ? 0
+              : paidAmount;
+      const finalMode: ImportBillRow["paymentMode"] =
+        guest.isGuest && paymentMode === "credit"
+          ? "cash"
+          : paymentMode === "credit" && finalPaid === 0
+            ? "credit"
+            : paymentMode === "credit"
+              ? "cash"
+              : paymentMode;
+
       bills.push({
         externalNumber,
         billKind,
         billDate: date,
-        partyName,
-        displayName: partyName,
+        partyName: guest.partyName,
+        displayName: guest.displayName,
+        isGuest: guest.isGuest,
         lines,
         sundryCharges,
+        accountLines,
         total,
-        paidAmount: 0,
-        paymentMode: "credit",
+        paidAmount: finalPaid,
+        paymentMode: finalMode,
+        bankLedgerName: tender.bankLedgerName,
         notes: `Imported from BUSY ${billKind} ${externalNumber}`,
+        externalId: textOf(voucher.OriginalID) || undefined,
+        seriesName: textOf(voucher.VchSeriesName) || undefined,
       });
     });
     billIndex += rows.length;
@@ -704,13 +883,14 @@ function inferCashPaid(ledgers: Array<{ name: string; amount: number }>): number
   return paid;
 }
 
-function resolvePaymentMode(
+function resolvePayment(
   total: number,
   paid: number,
-): ImportBillRow["paymentMode"] {
-  if (paid <= 0) return "credit";
-  if (paid >= total) return "cash";
-  return "mixed";
+  tenderMode: "cash" | "bank" | "upi" = "cash",
+): { paymentMode: ImportBillRow["paymentMode"]; paidAmount: number } {
+  if (paid <= 0) return { paymentMode: "credit", paidAmount: 0 };
+  if (paid >= total) return { paymentMode: tenderMode, paidAmount: total };
+  return { paymentMode: "mixed", paidAmount: paid };
 }
 
 export function parseTallyVouchers(
@@ -734,8 +914,9 @@ export function parseTallyVouchers(
       voucher.DATE ?? voucher.VoucherDate ?? voucher.BILLDATE,
     );
     const ledgers = collectLedgerEntries(voucher);
-    const partyName = inferPartyName(voucher, ledgers);
-    if (!partyName) return;
+    const rawParty = inferPartyName(voucher, ledgers);
+    if (!rawParty) return;
+    const guest = applyGuestParty(rawParty);
 
     const externalNumber = sanitizeBillNumber(
       textOf(
@@ -755,13 +936,14 @@ export function parseTallyVouchers(
       if (amount <= 0) return;
 
       payments.push({
-        partyName,
+        partyName: guest.partyName,
         direction: action === "receipt" ? "received" : "paid",
         amount,
         date,
         paymentMode: inferCashPaid(ledgers) > 0 ? "cash" : "cash",
         notes: notes || `Imported ${action} voucher ${externalNumber}`,
         externalRef: externalNumber,
+        skipParty: guest.isGuest,
       });
       return;
     }
@@ -780,18 +962,21 @@ export function parseTallyVouchers(
     const total = inventoryTotal > 0 ? inventoryTotal : ledgerTotal;
     if (total <= 0) return;
 
-    const paidAmount = Math.min(total, inferCashPaid(ledgers));
+    const payment = guest.isGuest
+      ? { paymentMode: "cash" as const, paidAmount: total }
+      : resolvePayment(total, inferCashPaid(ledgers));
 
     bills.push({
       externalNumber,
       billKind: action,
       billDate: date,
-      partyName,
-      displayName: partyName,
+      partyName: guest.partyName,
+      displayName: guest.displayName,
+      isGuest: guest.isGuest,
       lines,
       total,
-      paidAmount,
-      paymentMode: resolvePaymentMode(total, paidAmount),
+      paidAmount: payment.paidAmount,
+      paymentMode: payment.paymentMode,
       notes: notes || `Imported from Tally voucher ${externalNumber}`,
     });
   });
@@ -920,7 +1105,10 @@ export function parseBusyVouchers(
     ) || lines.reduce((s, l) => s + l.quantity * l.unitPrice, 0);
     if (total <= 0) return;
 
-    const paidAmount = absAmount(voucher.PaidAmount ?? voucher.CashAmount);
+    const payment = resolvePayment(
+      total,
+      absAmount(voucher.PaidAmount ?? voucher.CashAmount),
+    );
 
     const billKey = `${externalNumber}|${partyName}|${date.toISOString()}`;
     if (seenBills.has(billKey)) return;
@@ -934,8 +1122,8 @@ export function parseBusyVouchers(
       displayName: partyName,
       lines,
       total,
-      paidAmount: Math.min(total, paidAmount),
-      paymentMode: resolvePaymentMode(total, paidAmount),
+      paidAmount: payment.paidAmount,
+      paymentMode: payment.paymentMode,
       notes: notes || `Imported from BUSY voucher ${externalNumber}`,
     });
   });
@@ -1087,6 +1275,8 @@ export function parseCsvVouchers(csv: string): {
         : billLines.reduce((s, l) => s + l.quantity * l.unitPrice, 0);
     if (computedTotal <= 0) continue;
 
+    const payment = resolvePayment(computedTotal, paidAmount);
+
     bills.push({
       externalNumber,
       billKind: isPurchase ? "purchase" : "sale",
@@ -1095,8 +1285,8 @@ export function parseCsvVouchers(csv: string): {
       displayName: partyName,
       lines: billLines,
       total: computedTotal,
-      paidAmount: Math.min(computedTotal, paidAmount),
-      paymentMode: resolvePaymentMode(computedTotal, paidAmount),
+      paidAmount: payment.paidAmount,
+      paymentMode: payment.paymentMode,
       notes,
     });
   }

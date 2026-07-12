@@ -7,6 +7,68 @@ datasource db {
   provider = "sqlite"
 }
 
+/** Chart-of-accounts group (Busy AccountGroup / Tally Group / Zoho account type). */
+model AccountGroup {
+  id         String   @id @default(cuid())
+  name       String
+  parentId   String?
+  /** Busy tmpCode / external group code */
+  externalCode String?
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  parent   AccountGroup?  @relation("AccountGroupTree", fields: [parentId], references: [id])
+  children AccountGroup[] @relation("AccountGroupTree")
+  ledgers  LedgerAccount[]
+
+  @@unique([name, parentId])
+  @@index([parentId])
+  @@index([name])
+}
+
+/**
+ * Universal ledger — maps Busy Account, Tally LEDGER, Zoho CoA / contact ledger.
+ * accountKind: receivable | payable | bank | cash | income | expense | tax | equity | asset | liability | stock | other
+ */
+model LedgerAccount {
+  id              String   @id @default(cuid())
+  name            String
+  printName       String   @default("")
+  groupId         String?
+  accountKind     String
+  openingBalance  Float    @default(0)
+  balance         Float    @default(0)
+  phone           String   @default("")
+  mobile          String   @default("")
+  email           String   @default("")
+  address1        String   @default("")
+  address2        String   @default("")
+  address3        String   @default("")
+  gstin           String   @default("")
+  pan             String   @default("")
+  state           String   @default("")
+  city            String   @default("")
+  creditDays      Int?
+  /** Busy tmpCode / Tally GUID / Zoho account_id */
+  externalCode    String?
+  sourceSystem    String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  group            AccountGroup?       @relation(fields: [groupId], references: [id])
+  party            Party?
+  bankAccount      BankAccount?
+  voucherLines     VoucherAccountLine[]
+  vouchersAsParty  Voucher[]           @relation("VoucherPartyLedger")
+
+  @@unique([name, accountKind])
+  @@index([accountKind])
+  @@index([groupId])
+  @@index([externalCode])
+  @@index([name])
+}
+
 model Party {
   id                    String   @id @default(cuid())
   name                  String
@@ -19,12 +81,15 @@ model Party {
   lastPaymentAt         DateTime?
   /** Customers only: warn if balance owed and no payment in this many days */
   maxDaysWithoutPayment Int?
+  /** Linked AR/AP ledger in the universal chart of accounts */
+  ledgerAccountId       String?  @unique
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
-  bills        Bill[]
-  payments     Payment[]
-  transactions LedgerTransaction[]
+  ledgerAccount LedgerAccount?      @relation(fields: [ledgerAccountId], references: [id])
+  bills         Bill[]
+  payments      Payment[]
+  transactions  LedgerTransaction[]
 
   @@index([partyType, balance])
   @@index([name])
@@ -50,40 +115,120 @@ model Category {
 }
 
 model Item {
-  id               String   @id @default(cuid())
-  name             String
-  categoryId       String
-  price            Float
-  purchasePrice    Float    @default(0)
-  quantity         Float    @default(0)
-  lowStockThreshold Float   @default(5)
-  unit             String   @default("pieces")
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                String   @id @default(cuid())
+  name              String
+  categoryId        String
+  price             Float
+  purchasePrice     Float    @default(0)
+  quantity          Float    @default(0)
+  lowStockThreshold Float    @default(5)
+  unit              String   @default("pieces")
+  altUnit           String   @default("")
+  mrp               Float    @default(0)
+  hsnCode           String   @default("")
+  externalCode      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  category Category @relation(fields: [categoryId], references: [id])
-  billLines BillLine[]
+  category        Category         @relation(fields: [categoryId], references: [id])
+  billLines       BillLine[]
+  voucherItemLines VoucherItemLine[]
 
   @@index([categoryId])
   @@index([name])
+  @@index([externalCode])
 }
 
 model BankAccount {
-  id            String   @id @default(cuid())
-  accountName   String
-  bankName      String
-  accountNumber String
-  ifscCode      String   @default("")
-  upiId         String   @default("")
-  isPrimary     Boolean  @default(false)
-  notes         String   @default("")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id              String   @id @default(cuid())
+  accountName     String
+  bankName        String
+  accountNumber   String
+  ifscCode        String   @default("")
+  upiId           String   @default("")
+  isPrimary       Boolean  @default(false)
+  notes           String   @default("")
+  ledgerAccountId String?  @unique
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  bills    Bill[]
-  payments Payment[]
+  ledgerAccount LedgerAccount? @relation(fields: [ledgerAccountId], references: [id])
+  bills         Bill[]
+  payments      Payment[]
 
   @@index([isPrimary])
+}
+
+/**
+ * Universal voucher header (Busy/Tally/Zoho invoices, bills, receipts, payments).
+ * Bill/Payment remain for UI; vouchers hold the full accounting trail.
+ */
+model Voucher {
+  id             String   @id @default(cuid())
+  /** sale | purchase | sale_return | purchase_return | receipt | payment | journal | stock_journal */
+  voucherType    String
+  voucherNumber  String
+  voucherDate    DateTime
+  seriesName     String   @default("")
+  externalId     String?
+  partyLedgerId  String?
+  displayName    String   @default("")
+  narration      String   @default("")
+  total          Float    @default(0)
+  paidAmount     Float    @default(0)
+  paymentMode    String   @default("cash")
+  billId         String?  @unique
+  paymentId      String?  @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  partyLedger  LedgerAccount?       @relation("VoucherPartyLedger", fields: [partyLedgerId], references: [id])
+  bill         Bill?                @relation(fields: [billId], references: [id], onDelete: SetNull)
+  payment      Payment?             @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  itemLines    VoucherItemLine[]
+  accountLines VoucherAccountLine[]
+
+  @@unique([voucherNumber, voucherType])
+  @@index([voucherDate(sort: Desc)])
+  @@index([voucherType, voucherDate])
+  @@index([partyLedgerId])
+  @@index([externalId])
+}
+
+model VoucherItemLine {
+  id            String @id @default(cuid())
+  voucherId     String
+  itemId        String?
+  name          String
+  quantity      Float
+  unitPrice     Float
+  purchasePrice Float  @default(0)
+  lineTotal     Float
+  unit          String @default("")
+
+  voucher Voucher @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  item    Item?   @relation(fields: [itemId], references: [id])
+
+  @@index([voucherId])
+  @@index([itemId])
+}
+
+model VoucherAccountLine {
+  id                String @id @default(cuid())
+  voucherId         String
+  ledgerId          String?
+  ledgerName        String
+  /** debit | credit */
+  entryType         String
+  amount            Float
+  groupNameSnapshot String @default("")
+  srNo              Int    @default(0)
+
+  voucher Voucher        @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  ledger  LedgerAccount? @relation(fields: [ledgerId], references: [id])
+
+  @@index([voucherId])
+  @@index([ledgerId])
 }
 
 model Bill {
@@ -104,15 +249,55 @@ model Bill {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  party       Party?       @relation(fields: [partyId], references: [id])
-  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
-  lines       BillLine[]
+  party         Party?              @relation(fields: [partyId], references: [id])
+  bankAccount   BankAccount?        @relation(fields: [bankAccountId], references: [id])
+  lines         BillLine[]
   sundryCharges BillSundryCharge[]
   stockWarnings BillStockWarning[]
-  transactions LedgerTransaction[]
+  paymentSplits BillPaymentSplit[]
+  transactions  LedgerTransaction[]
+  voucher       Voucher?
 
   @@index([partyId, createdAt(sort: Desc)])
   @@index([createdAt(sort: Desc)])
+  @@index([billDate(sort: Desc)])
+  @@index([billKind, billDate])
+}
+
+model BillPaymentSplit {
+  id            String  @id @default(cuid())
+  billId        String
+  /** cash | upi | bank */
+  method        String
+  amount        Float
+  bankAccountId String?
+
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([billId])
+}
+
+model Daybook {
+  id          String   @id @default(cuid())
+  /** Calendar day at local noon */
+  date        DateTime @unique
+  morningCash Float    @default(0)
+  notes       String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([date])
+}
+
+model DaybookExpense {
+  id        String   @id @default(cuid())
+  /** Calendar day at local noon (matches Daybook.date) */
+  date      DateTime
+  reason    String
+  amount    Float
+  createdAt DateTime @default(now())
+
+  @@index([date])
 }
 
 model BillLine {
@@ -143,6 +328,15 @@ model BillSundryCharge {
   @@index([billId])
 }
 
+/** User-defined sundry labels (presets stay in code; these are custom only). */
+model SundryType {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  @@index([name])
+}
+
 model BillStockWarning {
   id             String  @id @default(cuid())
   billId         String
@@ -170,9 +364,10 @@ model Payment {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  party       Party       @relation(fields: [partyId], references: [id])
-  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
+  party        Party               @relation(fields: [partyId], references: [id])
+  bankAccount  BankAccount?        @relation(fields: [bankAccountId], references: [id])
   transactions LedgerTransaction[]
+  voucher      Voucher?
 
   @@index([partyId, date(sort: Desc)])
   @@index([date(sort: Desc)])
@@ -227,3 +422,88 @@ model Counter {
   seq Int    @default(0)
 }
 
+/** Staff register — salary, attendance, on-demand advances. */
+model Employee {
+  id            String   @id @default(cuid())
+  name          String
+  phone         String   @default("")
+  role          String   @default("")
+  address       String   @default("")
+  joinDate      DateTime @default(now())
+  /** Fixed monthly salary */
+  monthlySalary Float    @default(0)
+  /** Day of month salary is due (1–28) */
+  payDay        Int      @default(1)
+  isActive      Boolean  @default(true)
+  notes         String   @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  attendance EmployeeAttendance[]
+  advances   EmployeeAdvance[]
+  payrolls   EmployeePayroll[]
+
+  @@index([name])
+  @@index([isActive])
+}
+
+model EmployeeAttendance {
+  id         String   @id @default(cuid())
+  employeeId String
+  /** Calendar day at local noon */
+  date       DateTime
+  /** present | absent | half_day | leave */
+  status     String   @default("present")
+  notes      String   @default("")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, date])
+  @@index([date])
+  @@index([employeeId, date])
+}
+
+/** On-demand / advance pay — deducted from the next salary settlement. */
+model EmployeeAdvance {
+  id                 String   @id @default(cuid())
+  employeeId         String
+  amount             Float
+  date               DateTime
+  notes              String   @default("")
+  /** open | deducted | void */
+  status             String   @default("open")
+  deductedInPayrollId String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  employee         Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  deductedInPayroll EmployeePayroll? @relation(fields: [deductedInPayrollId], references: [id], onDelete: SetNull)
+
+  @@index([employeeId, status])
+  @@index([date(sort: Desc)])
+}
+
+/** Salary settlement for a period (usually one month). */
+model EmployeePayroll {
+  id               String   @id @default(cuid())
+  employeeId       String
+  periodStart      DateTime
+  periodEnd        DateTime
+  grossSalary      Float
+  advancesDeducted Float    @default(0)
+  netPaid          Float
+  paidAt           DateTime
+  /** cash | upi | bank */
+  paymentMode      String   @default("cash")
+  notes            String   @default("")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  employee Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  advances EmployeeAdvance[]
+
+  @@index([employeeId, paidAt(sort: Desc)])
+  @@index([paidAt(sort: Desc)])
+}

@@ -34,6 +34,16 @@ async function searchItems(q: string) {
   return json.data;
 }
 
+function isTypeToSearchKey(e: React.KeyboardEvent) {
+  return (
+    e.key.length === 1 &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    e.key !== " "
+  );
+}
+
 export function ItemCombobox(props: {
   value: string;
   onChange: (id: string, item?: Item) => void;
@@ -58,20 +68,43 @@ export function ItemCombobox(props: {
     query.data?.find((i) => i._id === props.value) ??
     props.catalog?.find((i) => i._id === props.value);
 
+  React.useEffect(() => {
+    if (!open) return;
+    const id = window.setTimeout(() => {
+      document
+        .querySelector<HTMLInputElement>('[data-slot="command-input"]')
+        ?.focus();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [open]);
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQ("");
+      }}
+    >
       <PopoverTrigger
         type="button"
         disabled={props.disabled}
         aria-expanded={open}
+        {...props.triggerProps}
         onKeyDown={(e) => {
           props.triggerProps?.onKeyDown?.(e);
+          if (e.defaultPrevented) return;
           if (e.key === "Shift") {
             e.preventDefault();
             if (!props.disabled) setOpen((v) => !v);
+            return;
+          }
+          if (!open && !props.disabled && isTypeToSearchKey(e)) {
+            e.preventDefault();
+            setQ(e.key);
+            setOpen(true);
           }
         }}
-        {...props.triggerProps}
         className={cn(
           buttonVariants({ variant: props.hideChevron ? "ghost" : "outline" }),
           "w-full font-normal",
@@ -107,6 +140,7 @@ export function ItemCombobox(props: {
                   onSelect={() => {
                     props.onChange(it._id, it);
                     setOpen(false);
+                    setQ("");
                   }}
                 >
                   <Check

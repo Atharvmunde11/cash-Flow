@@ -7,16 +7,23 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { format } from "date-fns";
 import {
   AlertTriangle,
+  Plus,
   QrCode,
   Printer,
+  Trash2,
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { billCreateSchema, type BillCreateInput } from "@/lib/validations";
+import {
+  SUNDRY_PRESETS,
+  isForbiddenSundryName,
+} from "@/lib/sundry-types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -41,6 +48,10 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { InvoicePrint } from "./Invoiceprint";
 import { usePrintInvoice } from "../../../hooks/Useprintinvoice";
 import { BillingBusyGrid, type BusyItemLine, type BusySundryLine } from "@/components/billing/billing-busy-grid";
+import {
+  applyPrintOptions,
+  PrintInvoiceDialog,
+} from "@/components/billing/print-invoice-dialog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -64,6 +75,13 @@ type ExtendedLine = {
   sundryAmount?: number;
 };
 
+type PaymentSplitRow = {
+  id: string;
+  method: "cash" | "upi" | "bank";
+  amount: number;
+  bankAccountId?: string;
+};
+
 type BankAccount = {
   _id: string;
   accountName: string;
@@ -85,7 +103,7 @@ let _uid = 0;
 const uid = () => String(++_uid);
 
 function createDefaultExtLines(): ExtendedLine[] {
-  return [{ id: uid(), lineType: "item", itemId: "", quantity: 1 }];
+  return [{ id: uid(), lineType: "item", itemId: "" }];
 }
 
 async function fetchBillDetail(id: string) {
@@ -113,12 +131,16 @@ function BillingPageComponent() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [selectedBillId, setSelectedBillId] = useState<string | null>(null);
   const [postCreateOpen, setPostCreateOpen] = useState(false);
+  const [printDialogOpen, setPrintDialogOpen] = useState(false);
   const postCreateAllowCloseRef = useRef(false);
   const [createdBill, setCreatedBill] = useState<{
     id: string;
     billNumber: string;
   } | null>(null);
   const [extLines, setExtLines] = useState<ExtendedLine[]>(createDefaultExtLines);
+  const [paymentSplits, setPaymentSplits] = useState<PaymentSplitRow[]>(() => [
+    { id: uid(), method: "cash", amount: 0 },
+  ]);
 
   const extLinesRef = useRef(extLines);
   extLinesRef.current = extLines;
@@ -145,6 +167,17 @@ function BillingPageComponent() {
     queryFn: fetchBankAccounts,
   });
 
+  const sundryTypes = useQuery({
+    queryKey: ["sundry-types"],
+    queryFn: async () => {
+      const res = await fetch("/api/sundry-types");
+      if (!res.ok) throw new Error("Failed");
+      const json = (await res.json()) as { data: Array<{ name: string }> };
+      return json.data ?? [];
+    },
+    staleTime: 30_000,
+  });
+
   const form = useForm<BillCreateInput>({
     resolver: zodResolver(billCreateSchema) as Resolver<BillCreateInput>,
     defaultValues: {
@@ -156,12 +189,13 @@ function BillingPageComponent() {
       paidAmount: 0,
       paymentMode: "cash",
       bankAccountId: "",
+      paymentSplits: [],
       notes: "",
       allowNegativeStock: false,
     },
   });
 
-  // Remember last billing subpage and persist draft across tab switches.
+  // Remember last billing subpage (kind) — do not persist form draft.
   useEffect(() => {
     try {
       sessionStorage.setItem(
@@ -173,57 +207,18 @@ function BillingPageComponent() {
     }
   }, [searchParams]);
 
+  // Reset billing form when leaving the page.
   useEffect(() => {
-    // Restore draft only when NOT editing a specific bill.
-    if (searchParams.get("billId")) return;
-    try {
-      const raw = sessionStorage.getItem("cf_billing_draft");
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as {
-        form?: any;
-        extLines?: ExtendedLine[];
-      };
-      if (parsed?.form) {
-        const f = parsed.form;
-        form.reset({
-          ...f,
-          billDate: f.billDate ? new Date(f.billDate) : new Date(),
-        });
+    return () => {
+      try {
+        sessionStorage.removeItem("cf_billing_draft");
+      } catch {
+        // ignore
       }
-      if (Array.isArray(parsed?.extLines) && parsed.extLines.length) {
-        setExtLines(parsed.extLines);
-      }
-    } catch {
-      // ignore
-    }
-    // run only once
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    };
   }, []);
 
-  useEffect(() => {
-    // Save draft whenever user changes form/lines (but not while editing an existing bill).
-    if (searchParams.get("billId")) return;
-    try {
-      const vals = form.getValues();
-      sessionStorage.setItem(
-        "cf_billing_draft",
-        JSON.stringify({
-          form: {
-            ...vals,
-            billDate:
-              vals.billDate instanceof Date
-                ? vals.billDate.toISOString()
-                : vals.billDate,
-          },
-          extLines,
-        }),
-      );
-    } catch {
-      // ignore
-    }
-  }, [extLines, form, searchParams]);
-
-  // Billing draft is persisted; no navigation blocking needed.
+  // Billing resets on leave; no draft restore.
 
   const billKind = form.watch("billKind");
   const paymentMode = form.watch("paymentMode");
@@ -238,7 +233,11 @@ function BillingPageComponent() {
   const paymentAlert = useQuery({
     queryKey: ["payment-alert", partyId],
     queryFn: () => fetchPaymentAlert(partyId!),
-    enabled: Boolean(partyId && partyId.trim().length > 0 && billKind === "sale"),
+    enabled: Boolean(
+      partyId &&
+        partyId.trim().length > 0 &&
+        (billKind === "sale" || billKind === "sale_return"),
+    ),
   });
 
   useEffect(() => {
@@ -250,8 +249,18 @@ function BillingPageComponent() {
     setSelectedBillId(null);
 
     const kind = searchParams.get("kind");
-    if (kind === "purchase") {
-      form.setValue("billKind", "purchase");
+    if (
+      kind === "purchase" ||
+      kind === "sale_return" ||
+      kind === "purchase_return"
+    ) {
+      form.setValue("billKind", kind);
+      if (kind === "sale_return" || kind === "purchase_return") {
+        form.setValue("paymentMode", "credit");
+        form.setValue("paidAmount", 0);
+      }
+    } else if (kind === "sale" || !kind) {
+      form.setValue("billKind", "sale");
     }
   }, [searchParams, form]);
 
@@ -296,10 +305,10 @@ function BillingPageComponent() {
                   line?.item?.id ??
                   line?.item?._id ??
                   "",
-            quantity: line.quantity,
+            quantity: Number(line.quantity) > 0 ? Number(line.quantity) : 1,
             unitPrice: line.unitPrice,
           }))
-        : [{ id: uid(), lineType: "item", itemId: "", quantity: 1 }];
+        : [{ id: uid(), lineType: "item", itemId: "" }];
 
     const sundryLines: ExtendedLine[] = Array.isArray(
       (selectedBill.data as any).sundryCharges,
@@ -321,7 +330,13 @@ function BillingPageComponent() {
 
   const itemsSubtotal = extLines
     .filter((l) => l.lineType === "item")
-    .reduce((s, l) => s + (Number(l.quantity) || 0) * (l.unitPrice ?? 0), 0);
+    .reduce((s, l) => {
+      const qty = Number(l.quantity) || 0;
+      const catalog = items.data?.find((it) => it._id === l.itemId);
+      const rate =
+        l.unitPrice !== undefined ? l.unitPrice : (catalog?.price ?? 0);
+      return s + qty * rate;
+    }, 0);
 
   const sundrySubtotal = extLines
     .filter((l) => l.lineType === "sundry")
@@ -360,7 +375,7 @@ function BillingPageComponent() {
     const newId = uid();
     setExtLines((prev) => [
       ...prev,
-      { id: newId, lineType: "item", itemId: "", quantity: 1 },
+      { id: newId, lineType: "item", itemId: "" },
     ]);
     return newId;
   }, []);
@@ -442,10 +457,27 @@ function BillingPageComponent() {
       const current = target.closest("[data-bill-nav]") as HTMLElement | null;
       if (!current) return;
 
+      const isTextarea = target.tagName === "TEXTAREA";
+      const isNotesField = current.getAttribute("data-bill-nav") === "notes";
+      // Notes is a compact single-line field — arrows always move between fields.
+      const caretAtEnd =
+        isNotesField ||
+        (isTextarea &&
+          target instanceof HTMLTextAreaElement &&
+          target.selectionStart === target.value.length &&
+          target.selectionEnd === target.value.length);
+      const caretAtStart =
+        isNotesField ||
+        (isTextarea &&
+          target instanceof HTMLTextAreaElement &&
+          target.selectionStart === 0 &&
+          target.selectionEnd === 0);
+
+      // From notes: → goes to the item list. Elsewhere: → / Enter move forward.
       const isForward =
-        (e.key === "ArrowRight" && target.tagName !== "TEXTAREA") ||
-        (e.key === "Enter" && target.tagName !== "TEXTAREA" && !e.shiftKey);
-      const isBack = e.key === "ArrowLeft";
+        (e.key === "ArrowRight" && (!isTextarea || caretAtEnd)) ||
+        (e.key === "Enter" && !isTextarea && !e.shiftKey);
+      const isBack = e.key === "ArrowLeft" && (!isTextarea || caretAtStart);
 
       if (!isForward && !isBack) return;
 
@@ -557,7 +589,7 @@ function BillingPageComponent() {
           e.preventDefault();
           updateLine(lineId, {
             itemId: "",
-            quantity: 1,
+            quantity: undefined,
             unitPrice: undefined,
           });
           focusFirstItemField(lineId);
@@ -590,23 +622,30 @@ function BillingPageComponent() {
   );
 
   const addSundryLine = useCallback(() => {
-    const newId = uid();
-    setExtLines((prev) => [
-      ...prev,
-      { id: newId, lineType: "sundry", sundryLabel: "", sundryAmount: 0 },
-    ]);
-    focusSundryLabelField(newId);
-  }, [focusSundryLabelField]);
+    // Focus the picker row — do not create a blank/walk-in sundry line.
+    window.setTimeout(() => {
+      document
+        .querySelector<HTMLElement>(
+          'tr:not([data-sundry-row]) [data-bill-nav="sundryLabel"]',
+        )
+        ?.focus();
+    }, 0);
+  }, []);
 
   const addSundryWithLabel = useCallback(
     (label: string) => {
+      const trimmed = label.trim();
+      if (!trimmed || isForbiddenSundryName(trimmed)) {
+        toast.error("Pick a sundry from the list");
+        return;
+      }
       const newId = uid();
       setExtLines((prev) => [
         ...prev,
         {
           id: newId,
           lineType: "sundry",
-          sundryLabel: label,
+          sundryLabel: trimmed,
           sundryAmount: undefined,
         },
       ]);
@@ -683,6 +722,11 @@ function BillingPageComponent() {
 
   useEffect(() => {
     if (isEditing) return;
+    const isReturn =
+      billKind === "sale_return" || billKind === "purchase_return";
+    // Returns are credit notes by default — do not auto-mark as paid.
+    if (isReturn) return;
+    if (paymentMode === "mixed") return;
     if (
       paymentMode === "cash" ||
       paymentMode === "upi" ||
@@ -690,14 +734,31 @@ function BillingPageComponent() {
     ) {
       form.setValue("paidAmount", computedTotal);
     }
-    if (
-      paymentMode !== "upi" &&
-      paymentMode !== "bank" &&
-      paymentMode !== "mixed"
-    ) {
+    if (paymentMode !== "upi" && paymentMode !== "bank") {
       form.setValue("bankAccountId", "");
     }
-  }, [computedTotal, isEditing, paymentMode, form]);
+  }, [computedTotal, isEditing, paymentMode, billKind, form]);
+
+  // Mixed tender rows: keep paidAmount = sum of splits.
+  useEffect(() => {
+    if (paymentMode !== "mixed") return;
+    const sum = paymentSplits.reduce((s, row) => s + (Number(row.amount) || 0), 0);
+    form.setValue("paidAmount", sum);
+    const online = paymentSplits.find(
+      (row) => row.method !== "cash" && row.bankAccountId,
+    );
+    if (online?.bankAccountId) {
+      form.setValue("bankAccountId", online.bankAccountId);
+    }
+  }, [paymentMode, paymentSplits, form]);
+
+  useEffect(() => {
+    if (paymentMode !== "mixed") return;
+    setPaymentSplits((prev) => {
+      if (prev.length > 0) return prev;
+      return [{ id: uid(), method: "cash", amount: 0 }];
+    });
+  }, [paymentMode]);
 
   // ── Submit ──────────────────────────────────────────────────────────────────
 
@@ -737,6 +798,7 @@ function BillingPageComponent() {
     window.history.replaceState(null, "", "/billing");
     setSelectedBillId(null);
     setExtLines(createDefaultExtLines());
+    setPaymentSplits([{ id: uid(), method: "cash", amount: 0 }]);
     form.reset({
       billKind: "sale",
       billDate: new Date(),
@@ -746,10 +808,23 @@ function BillingPageComponent() {
       paidAmount: 0,
       paymentMode: "cash",
       bankAccountId: "",
+      paymentSplits: [],
       notes: "",
       allowNegativeStock: false,
     });
   }, [form]);
+
+  const openPrintDialog = useCallback(() => {
+    setPrintDialogOpen(true);
+  }, []);
+
+  const handlePrintWithOptions = useCallback(
+    (options: Parameters<typeof applyPrintOptions>[0]) => {
+      applyPrintOptions(options);
+      window.setTimeout(() => window.print(), 50);
+    },
+    [],
+  );
 
   const update = useMutation({
     mutationFn: async (payload: Record<string, unknown>) => {
@@ -889,6 +964,13 @@ function BillingPageComponent() {
        */}
       <InvoicePrint data={invoiceData} />
 
+      <PrintInvoiceDialog
+        open={printDialogOpen}
+        onOpenChange={setPrintDialogOpen}
+        partyId={partyId || null}
+        onPrintInvoice={handlePrintWithOptions}
+      />
+
       <UpiQrFullscreen
         open={qrOpen}
         onClose={() => setQrOpen(false)}
@@ -941,7 +1023,7 @@ function BillingPageComponent() {
             >
               {waSending ? "Downloading..." : "Download PDF"}
             </Button>
-            <Button type="button" variant="outline" onClick={() => window.print()}>
+            <Button type="button" variant="outline" onClick={openPrintDialog}>
               Print bill
             </Button>
             {createdBill?.id ? (
@@ -971,10 +1053,19 @@ function BillingPageComponent() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
-            {isEditing ? "Edit Invoice" : "New Invoice"}
+            {isEditing
+              ? "Edit bill"
+              : billKind === "purchase"
+                ? "New Purchase"
+                : billKind === "sale_return"
+                  ? "Sale Return"
+                  : billKind === "purchase_return"
+                    ? "Purchase Return"
+                    : "New Invoice"}
           </h1>
           <p className="text-sm text-muted-foreground">
-            Create sales or purchase invoices — stock and balances update together.
+            Create sales, purchases, and returns — stock and balances update
+            together.
           </p>
         </div>
 
@@ -991,8 +1082,8 @@ function BillingPageComponent() {
             type="button"
             variant="outline"
             className="gap-2"
-            onClick={() => window.print()}
-            title="Print invoice (Ctrl+P)"
+            onClick={openPrintDialog}
+            title="Print invoice"
           >
             <Printer className="size-4" />
             Print invoice
@@ -1120,32 +1211,96 @@ function BillingPageComponent() {
         onKeyDownCapture={handleBillingNavCapture}
         onSubmit={form.handleSubmit(
           (v) => {
-            const itemLines = extLines
-              .filter(
-                (l): l is ExtendedLine & { itemId: string; quantity: number } =>
-                  l.lineType === "item" &&
-                  typeof l.itemId === "string" &&
-                  l.itemId.trim().length > 0 &&
-                  typeof l.quantity === "number",
-              )
-              .map((l) => ({
-                itemId: l.itemId.trim(),
-                quantity: l.quantity,
-                unitPrice: l.unitPrice,
-              }));
+            const selectedItemLines = extLines.filter(
+              (l) =>
+                l.lineType === "item" &&
+                typeof l.itemId === "string" &&
+                l.itemId.trim().length > 0,
+            );
 
-            if (itemLines.length === 0) {
+            if (selectedItemLines.length === 0) {
               toast.error("Add at least one valid item line");
               return;
             }
 
+            const missingQty = selectedItemLines.some(
+              (l) =>
+                typeof l.quantity !== "number" ||
+                !Number.isFinite(l.quantity) ||
+                l.quantity <= 0,
+            );
+            if (missingQty) {
+              toast.error("Enter quantity for each selected item");
+              return;
+            }
+
+            const itemLines = selectedItemLines.map((l) => {
+              const catalog = items.data?.find((it) => it._id === l.itemId);
+              return {
+                itemId: l.itemId!.trim(),
+                quantity: l.quantity as number,
+                unitPrice:
+                  l.unitPrice !== undefined
+                    ? l.unitPrice
+                    : catalog?.price,
+              };
+            });
+
+            const allowedSundryLabels = new Set(
+              [
+                ...SUNDRY_PRESETS,
+                ...(sundryTypes.data ?? []).map((s) => s.name),
+              ]
+                .map((n) => n.trim().toLowerCase())
+                .filter(Boolean),
+            );
+
             const sundryCharges = extLines
               .filter((l) => l.lineType === "sundry")
               .map((l) => ({
-                label: l.sundryLabel ?? "Sundry",
+                label: (l.sundryLabel ?? "").trim(),
                 amount: Number(l.sundryAmount) || 0,
               }))
-              .filter((c) => c.amount !== 0);
+              .filter((c) => {
+                if (!c.label || c.amount === 0) return false;
+                if (isForbiddenSundryName(c.label)) return false;
+                return allowedSundryLabels.has(c.label.toLowerCase());
+              });
+
+            const rejectedSundry = extLines.some(
+              (l) =>
+                l.lineType === "sundry" &&
+                (Number(l.sundryAmount) || 0) !== 0 &&
+                (!l.sundryLabel?.trim() ||
+                  isForbiddenSundryName(l.sundryLabel) ||
+                  !allowedSundryLabels.has(
+                    (l.sundryLabel ?? "").trim().toLowerCase(),
+                  )),
+            );
+            if (rejectedSundry) {
+              toast.error(
+                "Choose a sundry from the list (presets or custom). Walk-in / typed labels are not allowed.",
+              );
+              return;
+            }
+
+            const splits =
+              v.paymentMode === "mixed"
+                ? paymentSplits
+                    .filter((row) => (Number(row.amount) || 0) > 0)
+                    .map((row) => ({
+                      method: row.method,
+                      amount: Number(row.amount) || 0,
+                      bankAccountId: row.bankAccountId,
+                    }))
+                : [];
+
+            if (v.paymentMode === "mixed" && splits.length === 0) {
+              toast.error("Add at least one payment split amount");
+              return;
+            }
+
+            const paidFromSplits = splits.reduce((s, row) => s + row.amount, 0);
 
             const payload: Record<string, unknown> = {
               billKind: v.billKind,
@@ -1157,9 +1312,11 @@ function BillingPageComponent() {
               displayName: v.displayName ?? "",
               lines: itemLines,
               sundryCharges,
-              paidAmount: v.paidAmount,
+              paidAmount:
+                v.paymentMode === "mixed" ? paidFromSplits : v.paidAmount,
               paymentMode: v.paymentMode,
               bankAccountId: v.bankAccountId || undefined,
+              paymentSplits: splits,
               notes: v.notes ?? "",
               allowNegativeStock: v.allowNegativeStock ?? false,
             };
@@ -1177,31 +1334,80 @@ function BillingPageComponent() {
       >
         {/* ── LEFT: Bill meta ── */}
         <div className="space-y-3 rounded-xl border p-3 lg:sticky lg:top-4">
-          {/* Bill kind */}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant={billKind === "sale" ? "default" : "outline"}
-              onClick={() => {
-                form.setValue("billKind", "sale");
-                form.setValue("partyId", "");
-              }}
-            >
-              Sale bill
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant={billKind === "purchase" ? "default" : "outline"}
-              onClick={() => {
-                form.setValue("billKind", "purchase");
-                form.setValue("partyId", "");
-              }}
-            >
-              Purchase bill
-            </Button>
-          </div>
+          {!isEditing ? (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={billKind === "sale" ? "default" : "outline"}
+                onClick={() => {
+                  form.setValue("billKind", "sale");
+                  form.setValue("partyId", "");
+                  form.setValue("displayName", "");
+                  window.history.replaceState(null, "", "/billing");
+                }}
+              >
+                Sale
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={billKind === "purchase" ? "default" : "outline"}
+                onClick={() => {
+                  form.setValue("billKind", "purchase");
+                  form.setValue("partyId", "");
+                  form.setValue("displayName", "");
+                  window.history.replaceState(
+                    null,
+                    "",
+                    "/billing?kind=purchase",
+                  );
+                }}
+              >
+                Purchase
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={billKind === "sale_return" ? "default" : "outline"}
+                onClick={() => {
+                  form.setValue("billKind", "sale_return");
+                  form.setValue("partyId", "");
+                  form.setValue("displayName", "");
+                  form.setValue("paymentMode", "credit");
+                  form.setValue("paidAmount", 0);
+                  window.history.replaceState(
+                    null,
+                    "",
+                    "/billing?kind=sale_return",
+                  );
+                }}
+              >
+                Sale return
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={
+                  billKind === "purchase_return" ? "default" : "outline"
+                }
+                onClick={() => {
+                  form.setValue("billKind", "purchase_return");
+                  form.setValue("partyId", "");
+                  form.setValue("displayName", "");
+                  form.setValue("paymentMode", "credit");
+                  form.setValue("paidAmount", 0);
+                  window.history.replaceState(
+                    null,
+                    "",
+                    "/billing?kind=purchase_return",
+                  );
+                }}
+              >
+                Purchase return
+              </Button>
+            </div>
+          ) : null}
 
           {/* Bill date */}
           <div className="space-y-1.5">
@@ -1227,7 +1433,11 @@ function BillingPageComponent() {
 
           {/* Party */}
           <div className="space-y-1.5">
-            <Label>{billKind === "sale" ? "Customer" : "Supplier"}</Label>
+            <Label>
+              {billKind === "purchase" || billKind === "purchase_return"
+                ? "Supplier"
+                : "Customer"}
+            </Label>
             <PartyCombobox
               hideChevron
               value={displayName}
@@ -1240,8 +1450,16 @@ function BillingPageComponent() {
                   form.setValue("displayName", val);
                 }
               }}
-              partyType={billKind === "sale" ? "customer" : "supplier"}
-              placeholder="Type customer name or select party"
+              partyType={
+                billKind === "sale" || billKind === "sale_return"
+                  ? "customer"
+                  : "supplier"
+              }
+              placeholder={
+                billKind === "purchase" || billKind === "purchase_return"
+                  ? "Type supplier name or select party"
+                  : "Type customer name or select party"
+              }
               triggerProps={{
                 id: "partyTrigger",
                 "data-bill-nav": "party",
@@ -1257,7 +1475,8 @@ function BillingPageComponent() {
           </div>
 
           {/* Payment alert */}
-          {paymentAlert.data?.alert && billKind === "sale" ? (
+          {paymentAlert.data?.alert &&
+          (billKind === "sale" || billKind === "sale_return") ? (
             <Alert variant="destructive">
               <AlertTriangle className="size-4" />
               <AlertTitle>Payment reminder</AlertTitle>
@@ -1274,12 +1493,16 @@ function BillingPageComponent() {
               <Label>Payment mode</Label>
               <Select
                 value={paymentMode}
-                onValueChange={(val) =>
-                  form.setValue(
-                    "paymentMode",
-                    val as BillCreateInput["paymentMode"],
-                  )
-                }
+                onValueChange={(val) => {
+                  const mode = val as BillCreateInput["paymentMode"];
+                  form.setValue("paymentMode", mode);
+                  if (mode === "mixed") {
+                    setPaymentSplits([
+                      { id: uid(), method: "cash", amount: 0 },
+                    ]);
+                    form.setValue("paidAmount", 0);
+                  }
+                }}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -1293,21 +1516,169 @@ function BillingPageComponent() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="paid">Paid amount</Label>
-              <Input
-                id="paid"
-                data-bill-nav="paid"
-                type="number"
-                step="0.01"
-                {...form.register("paidAmount", { valueAsNumber: true })}
-              />
-            </div>
+            {paymentMode !== "mixed" ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="paid">Paid amount</Label>
+                <Input
+                  id="paid"
+                  data-bill-nav="paid"
+                  type="number"
+                  step="0.01"
+                  {...form.register("paidAmount", { valueAsNumber: true })}
+                />
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <Label>Paid total</Label>
+                <div className="flex h-9 items-center rounded-md border px-3 text-sm tabular-nums">
+                  {formatMoney(
+                    paymentSplits.reduce(
+                      (s, row) => s + (Number(row.amount) || 0),
+                      0,
+                    ),
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
-          {(paymentMode === "upi" ||
-            paymentMode === "bank" ||
-            paymentMode === "mixed") && (
+          {paymentMode === "mixed" ? (
+            <div className="space-y-2 rounded-lg border p-3">
+              <Label className="text-xs text-muted-foreground">
+                Split payment
+              </Label>
+              <div className="space-y-2">
+                {paymentSplits.map((row, index) => {
+                  const isCashRow = index === 0;
+                  return (
+                    <div key={row.id} className="space-y-2">
+                      <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                        {isCashRow ? (
+                          <div className="flex h-8 items-center rounded-md border bg-muted/40 px-3 text-sm font-medium">
+                            Cash
+                          </div>
+                        ) : (
+                          <Select
+                            value={row.method}
+                            onValueChange={(val) =>
+                              setPaymentSplits((prev) =>
+                                prev.map((r) =>
+                                  r.id === row.id
+                                    ? {
+                                        ...r,
+                                        method: val as PaymentSplitRow["method"],
+                                      }
+                                    : r,
+                                ),
+                              )
+                            }
+                          >
+                            <SelectTrigger className="h-8">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="upi">UPI</SelectItem>
+                              <SelectItem value="bank">Bank</SelectItem>
+                              <SelectItem value="cash">Cash</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        )}
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="h-8"
+                          placeholder="Amount"
+                          value={row.amount || ""}
+                          onChange={(e) => {
+                            const amount =
+                              e.target.value === ""
+                                ? 0
+                                : Number(e.target.value) || 0;
+                            setPaymentSplits((prev) =>
+                              prev.map((r) =>
+                                r.id === row.id ? { ...r, amount } : r,
+                              ),
+                            );
+                          }}
+                        />
+                        {isCashRow ? (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="outline"
+                            className="h-8 w-8"
+                            title="Add UPI / bank row"
+                            onClick={() =>
+                              setPaymentSplits((prev) => [
+                                ...prev,
+                                { id: uid(), method: "upi", amount: 0 },
+                              ])
+                            }
+                          >
+                            <Plus className="size-3.5" />
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-muted-foreground"
+                            title="Remove"
+                            onClick={() =>
+                              setPaymentSplits((prev) =>
+                                prev.filter((r) => r.id !== row.id),
+                              )
+                            }
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                      {!isCashRow && row.method !== "cash" ? (
+                        <Select
+                          value={row.bankAccountId ?? "__none__"}
+                          onValueChange={(val) =>
+                            setPaymentSplits((prev) =>
+                              prev.map((r) =>
+                                r.id === row.id
+                                  ? {
+                                      ...r,
+                                      bankAccountId:
+                                        !val || val === "__none__"
+                                          ? undefined
+                                          : String(val),
+                                    }
+                                  : r,
+                              ),
+                            )
+                          }
+                        >
+                          <SelectTrigger className="h-8">
+                            <SelectValue placeholder="Bank account (optional)" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">None</SelectItem>
+                            {bankAccounts.data?.map((account) => (
+                              <SelectItem key={account._id} value={account._id}>
+                                {account.accountName} ({account.bankName})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Enter cash, then press + to add UPI/bank rows. Unpaid remainder
+                stays as credit.
+              </p>
+            </div>
+          ) : null}
+
+          {(paymentMode === "upi" || paymentMode === "bank") && (
             <div className="space-y-1.5">
               <Label>Receiving bank account</Label>
               <Select
@@ -1357,7 +1728,7 @@ function BillingPageComponent() {
           ) : null}
 
           {/* Negative stock */}
-          {billKind === "sale" ? (
+          {billKind === "sale" || billKind === "purchase_return" ? (
             <div className="flex items-center gap-2">
               <Checkbox
                 id="neg"
@@ -1442,7 +1813,7 @@ function BillingPageComponent() {
             if (lines.length <= 1) {
               updateLine(id, {
                 itemId: "",
-                quantity: 1,
+                quantity: undefined,
                 unitPrice: undefined,
               });
               focusFirstItemField(id);

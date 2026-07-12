@@ -1,6 +1,7 @@
 import { connectDb, db } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
 import { withMongoId, withMongoIds } from "@/lib/id-compat";
+import { repairAutoPaidReturnBills } from "@/lib/party-balance-repair";
 
 export const runtime = "nodejs";
 
@@ -11,6 +12,10 @@ export async function GET(
   try {
     await connectDb();
     const { id } = await ctx.params;
+
+    // Fix return bills that were auto-marked paid and zeroed the balance.
+    await repairAutoPaidReturnBills(id);
+
     const party = await db.party.findUnique({ where: { id } });
     if (!party) return jsonError("Not found", 404);
 
@@ -30,11 +35,11 @@ export async function GET(
       }),
     ]);
 
-    // Compute profit per bill
     const billsWithProfit = bills.map((b) => {
       const profit = (b.lines ?? []).reduce((sum: number, line: any) => {
         const pp = line.purchasePrice ?? 0;
-        if (b.billKind === "sale") return sum + (line.unitPrice - pp) * line.quantity;
+        if (b.billKind === "sale")
+          return sum + (line.unitPrice - pp) * line.quantity;
         return sum;
       }, 0);
       return { ...b, profit } as any;
@@ -50,7 +55,9 @@ export async function GET(
         bills: bills.length,
         payments: payments.length,
         canDelete:
-          transactions.length === 0 && bills.length === 0 && payments.length === 0,
+          transactions.length === 0 &&
+          bills.length === 0 &&
+          payments.length === 0,
       },
     });
   } catch (e) {

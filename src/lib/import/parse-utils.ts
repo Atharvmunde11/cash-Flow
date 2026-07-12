@@ -1,3 +1,22 @@
+import {
+  classifyAccountGroup,
+  isCashPartyAlias,
+  partyTypeFromAccountKind,
+} from "@/lib/import/account-classify";
+
+export {
+  classifyAccountGroup,
+  guestDisplayName,
+  isBankGroup,
+  isCashGroup,
+  isCashPartyAlias,
+  isTenderOrSystemLedgerName,
+  paymentModeFromAccountGroup,
+  partyTypeFromAccountKind,
+  resolveGuestDisplayName,
+  type AccountKind,
+} from "@/lib/import/account-classify";
+
 export function asArray<T>(value: T | T[] | undefined | null): T[] {
   if (value == null) return [];
   return Array.isArray(value) ? value : [value];
@@ -53,7 +72,9 @@ export function walkNodes(
 
 export function parseTallyQuantity(raw: unknown): number {
   const match = textOf(raw).match(/-?\d+(?:\.\d+)?/);
-  return match ? Number.parseFloat(match[0]) : 0;
+  if (!match) return 0;
+  const n = Number.parseFloat(match[0]);
+  return Number.isFinite(n) ? Math.abs(n) : 0;
 }
 
 export function parseTallyRate(raw: unknown): number {
@@ -81,33 +102,47 @@ export function parseImportDate(raw: unknown): Date {
 }
 
 export function tallyPartyType(parent: string): "customer" | "supplier" | null {
-  const p = parent.toLowerCase();
-  if (p.includes("sundry debtor") || p.includes("debtor")) return "customer";
-  if (p.includes("sundry creditor") || p.includes("creditor")) return "supplier";
-  return null;
+  return partyTypeFromAccountKind(classifyAccountGroup(parent));
 }
 
 export function busyPartyType(group: string): "customer" | "supplier" | null {
-  const g = group.toLowerCase();
-  if (
-    g.includes("debtor") ||
-    g.includes("customer") ||
-    g.includes("client") ||
-    g.includes("buyer") ||
-    g.includes("receivable")
-  ) {
-    return "customer";
-  }
-  if (
-    g.includes("creditor") ||
-    g.includes("supplier") ||
-    g.includes("vendor") ||
-    g.includes("seller") ||
-    g.includes("payable")
-  ) {
-    return "supplier";
-  }
-  return null;
+  return partyTypeFromAccountKind(classifyAccountGroup(group));
+}
+
+/** Read stock/opening quantity from BUSY/Tally-like master rows. */
+export function busyItemQuantity(row: Record<string, unknown>): number {
+  return Math.abs(
+    numOf(
+      row.OpeningQty ??
+        row.OPENINGQTY ??
+        row.OpQty ??
+        row.OPQTY ??
+        row.BalQty ??
+        row.BALQTY ??
+        row.BalanceQty ??
+        row.BALANCEQTY ??
+        row.ClosingQty ??
+        row.CLOSINGQTY ??
+        row.ClosingStock ??
+        row.CLOSINGSTOCK ??
+        row.CurrentStock ??
+        row.CURRENTSTOCK ??
+        row.CurStock ??
+        row.CURSTOCK ??
+        row.Stock ??
+        row.STOCK ??
+        row.StockQty ??
+        row.STOCKQTY ??
+        row.QtyMainUnit ??
+        row.QTYMAINUNIT ??
+        row.MCBalQty ??
+        row.MCBALQTY ??
+        row.Qty ??
+        row.QTY ??
+        row.Quantity ??
+        row.QUANTITY,
+    ),
+  );
 }
 
 /** Unit from BUSY item master or voucher line (MainUnit, BAG, etc.). */
@@ -174,8 +209,14 @@ export function looksLikeXml(text: string): boolean {
   return normalized.startsWith("<") && /<[A-Za-z]/.test(normalized);
 }
 
+/**
+ * True for cash/bank/UPI tender ledgers (and Cash / CASH PAYMENT party aliases).
+ * Do not use for income/expense/tax ledgers — see isTenderOrSystemLedgerName.
+ */
 export function isCashLedgerName(name: string): boolean {
-  const n = name.toLowerCase();
+  if (isCashPartyAlias(name)) return true;
+  const n = name.trim().toLowerCase();
+  if (!n) return false;
   return (
     n === "cash" ||
     n.includes("cash") ||

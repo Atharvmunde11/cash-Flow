@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] - 2026-07-12
+
+### Added
+
+- Employees, attendance, advances, and payroll
+- Daybook, receipts, sale/purchase returns, and sundries
+- Universal chart-of-accounts ledgers and voucher import support
+- Dual-arch Windows auto-update manifests (`latest.yml` + `latest-arm64.yml`)
+
+### Changed
+
+- Safe SQLite upgrades: additive schema ensure + pending SQL migrations only (userData DB preserved)
+- Electron publish flow uploads both architecture installers and correct updater YAML files
+
 ## [0.1.0] - 2026-07-10
 
 ### Added

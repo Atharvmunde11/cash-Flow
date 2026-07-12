@@ -12,8 +12,7 @@
 /dist
 /release
 
-# electron desktop (optional — build locally; not published to GitHub)
-/electron/
+# packaged installers (built locally; uploaded via GitHub Releases)
 *.exe
 *.blockmap
 

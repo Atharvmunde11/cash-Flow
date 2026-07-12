@@ -3,7 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Upload } from "lucide-react";
+import { Trash2, Upload } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -22,6 +22,9 @@ export type ImportResult = {
   source: string;
   filesProcessed?: number;
   counts: {
+    accountGroupsCreated?: number;
+    ledgersCreated?: number;
+    bankAccountsCreated?: number;
     partiesCreated: number;
     partiesSkipped: number;
     itemsCreated: number;
@@ -31,6 +34,7 @@ export type ImportResult = {
     billsSkipped: number;
     paymentsCreated: number;
     paymentsSkipped: number;
+    vouchersCreated?: number;
   };
   warnings: string[];
 };
@@ -39,6 +43,8 @@ type ImportPanelProps = {
   onImported?: (result: ImportResult) => void;
   showGuide?: boolean;
 };
+
+const isDev = process.env.NODE_ENV === "development";
 
 export function ImportPanel({ onImported, showGuide = true }: ImportPanelProps) {
   const qc = useQueryClient();
@@ -70,6 +76,21 @@ export function ImportPanel({ onImported, showGuide = true }: ImportPanelProps) 
       toast.success("Import finished");
       qc.invalidateQueries();
       onImported?.(data);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const wipeDb = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/dev/reset-db", { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to delete SQLite data");
+      return body.data as { message: string };
+    },
+    onSuccess: (data) => {
+      setImportResult(null);
+      toast.success(data.message ?? "SQLite data deleted");
+      qc.invalidateQueries();
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -163,14 +184,38 @@ export function ImportPanel({ onImported, showGuide = true }: ImportPanelProps) 
         </p>
       </div>
 
-      <Button
-        onClick={() => runImport.mutate()}
-        disabled={importFiles.length === 0 || runImport.isPending}
-        className="gap-2"
-      >
-        <Upload className="size-4" />
-        {runImport.isPending ? "Importing…" : "Import into SQLite"}
-      </Button>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          onClick={() => runImport.mutate()}
+          disabled={importFiles.length === 0 || runImport.isPending}
+          className="gap-2"
+        >
+          <Upload className="size-4" />
+          {runImport.isPending ? "Importing…" : "Import into SQLite"}
+        </Button>
+
+        {isDev ? (
+          <Button
+            type="button"
+            variant="destructive"
+            className="gap-2"
+            disabled={wipeDb.isPending || runImport.isPending}
+            onClick={() => {
+              if (
+                !window.confirm(
+                  "Delete ALL local SQLite data? This cannot be undone. (Development only)",
+                )
+              ) {
+                return;
+              }
+              wipeDb.mutate();
+            }}
+          >
+            <Trash2 className="size-4" />
+            {wipeDb.isPending ? "Deleting…" : "Delete all SQLite data"}
+          </Button>
+        ) : null}
+      </div>
 
       {importResult ? (
         <Alert>
@@ -180,6 +225,11 @@ export function ImportPanel({ onImported, showGuide = true }: ImportPanelProps) 
             {importResult.filesProcessed && importResult.filesProcessed > 1 ? (
               <p>Files merged: {importResult.filesProcessed}</p>
             ) : null}
+            <p>
+              Ledgers: {importResult.counts.ledgersCreated ?? 0} · Banks:{" "}
+              {importResult.counts.bankAccountsCreated ?? 0} · Groups:{" "}
+              {importResult.counts.accountGroupsCreated ?? 0}
+            </p>
             <p>
               Parties: {importResult.counts.partiesCreated} created,{" "}
               {importResult.counts.partiesSkipped} skipped
@@ -196,6 +246,11 @@ export function ImportPanel({ onImported, showGuide = true }: ImportPanelProps) 
               Payments: {importResult.counts.paymentsCreated} created,{" "}
               {importResult.counts.paymentsSkipped} skipped
             </p>
+            {(importResult.counts.vouchersCreated ?? 0) > 0 ? (
+              <p>
+                Vouchers (accounting trail): {importResult.counts.vouchersCreated}
+              </p>
+            ) : null}
             {importResult.warnings.map((w) => (
               <p key={w} className="text-amber-700 dark:text-amber-400">
                 {w}
