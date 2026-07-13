@@ -82,7 +82,7 @@ export default function ReportsPage() {
         <TabsContent value="balance-sheet" className="pt-4">
           <div className="rounded-xl border bg-card p-6 shadow-sm">
             <h2 className="text-xl font-semibold mb-4">Balance Sheet</h2>
-            {(bsQuery.isLoading || bsQuery.isIdle || !bsData) ? <p>Loading...</p> : bsQuery.isError ? <p className="text-destructive">Failed to load</p> : (
+            {(bsQuery.isPending || !bsData) ? <p>Loading...</p> : bsQuery.isError ? <p className="text-destructive">Failed to load</p> : (
               <div className="space-y-6">
                 <div>
                   <h3 className="text-lg font-medium border-b pb-2 mb-2">Assets</h3>
@@ -142,7 +142,7 @@ export default function ReportsPage() {
         <TabsContent value="income-statement" className="pt-4">
           <div className="rounded-xl border bg-card p-6 shadow-sm">
             <h2 className="text-xl font-semibold mb-4">Profit & Loss (Income Statement)</h2>
-            {(isQuery.isLoading || isQuery.isIdle || !isData) ? <p>Loading...</p> : isQuery.isError ? <p className="text-destructive">Failed to load</p> : (
+            {(isQuery.isPending || !isData) ? <p>Loading...</p> : isQuery.isError ? <p className="text-destructive">Failed to load</p> : (
               <div className="space-y-6">
                 <div>
                   <h3 className="text-lg font-medium border-b pb-2 mb-2">Revenue</h3>
@@ -192,7 +192,7 @@ export default function ReportsPage() {
         <TabsContent value="cashflow" className="pt-4">
           <div className="rounded-xl border bg-card p-6 shadow-sm">
             <h2 className="text-xl font-semibold mb-4">Cashflow Statement</h2>
-            {(cfQuery.isLoading || cfQuery.isIdle || !cfData) ? <p>Loading...</p> : cfQuery.isError ? <p className="text-destructive">Failed to load</p> : (
+            {(cfQuery.isPending || !cfData) ? <p>Loading...</p> : cfQuery.isError ? <p className="text-destructive">Failed to load</p> : (
               <div className="space-y-4">
                 <div className="flex justify-between p-2 border-b">
                     <span>Beginning Cash Balance</span>
@@ -218,7 +218,7 @@ export default function ReportsPage() {
         <TabsContent value="retained-earnings" className="pt-4">
           <div className="rounded-xl border bg-card p-6 shadow-sm">
             <h2 className="text-xl font-semibold mb-4">Statement of Retained Earnings</h2>
-            {(reQuery.isLoading || reQuery.isIdle || !reData) ? <p>Loading...</p> : reQuery.isError ? <p className="text-destructive">Failed to load</p> : (
+            {(reQuery.isPending || !reData) ? <p>Loading...</p> : reQuery.isError ? <p className="text-destructive">Failed to load</p> : (
               <div className="space-y-4">
                 <div className="flex justify-between p-2 border-b">
                     <span>Beginning Retained Earnings</span>
