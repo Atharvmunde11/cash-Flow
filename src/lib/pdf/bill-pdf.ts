@@ -58,26 +58,33 @@ export async function renderBillPdfBuffer(opts: {
     chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)),
   );
 
-  // Header
-  doc.font("Helvetica-Bold").fontSize(18).text(companyName, { align: "left" });
+  // Header — centered, smaller business name
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(13)
+    .text(companyName, { align: "center" });
   if (companyAddress) {
     doc.moveDown(0.15);
     doc.font("Helvetica").fontSize(9).fillColor("#444").text(companyAddress, {
-      align: "left",
+      align: "center",
     });
     doc.fillColor("#000");
   }
   if (companyPhone) {
     doc.moveDown(0.1);
-    doc.font("Helvetica").fontSize(9).fillColor("#444").text(`Ph: ${companyPhone}`, {
-      align: "left",
-    });
+    doc
+      .font("Helvetica")
+      .fontSize(9)
+      .fillColor("#444")
+      .text(`Ph: ${companyPhone}`, {
+        align: "center",
+      });
     doc.fillColor("#000");
   }
-  doc.moveDown(0.2);
+  doc.moveDown(0.35);
   doc
     .font("Helvetica-Bold")
-    .fontSize(14)
+    .fontSize(12)
     .text(bill.billKind === "purchase" ? "PURCHASE BILL" : "INVOICE", {
       align: "right",
     });

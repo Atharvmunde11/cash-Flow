@@ -4,6 +4,7 @@ import { partyBalanceDelta } from "@/lib/ledger";
 import { jsonError, jsonOk } from "@/lib/http";
 import { paymentCreateSchema } from "@/lib/validations";
 import type { Prisma } from "@prisma/client";
+import { assertDateWritable } from "@/lib/financial-year";
 
 export const runtime = "nodejs";
 
@@ -139,6 +140,11 @@ export async function PATCH(
     const row = await db.payment.findUnique({ where: { id } });
     if (!row) return jsonError("Not found", 404);
 
+    await assertDateWritable(row.date);
+    if (parsed.data.date) {
+      await assertDateWritable(parsed.data.date);
+    }
+
     const originalPartyId = row.partyId;
     const nextPartyId = parsed.data.partyId ?? row.partyId;
     const nextParty = await db.party.findUnique({ where: { id: nextPartyId } });
@@ -239,6 +245,8 @@ export async function DELETE(
 
     const row = await db.payment.findUnique({ where: { id } });
     if (!row) return jsonError("Not found", 404);
+
+    await assertDateWritable(row.date);
 
     const ledgerRow = await findLedgerRowForPayment({
       id: row.id,

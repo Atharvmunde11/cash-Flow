@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-07-13
+
+### Added
+
+- Financial year support (Indian Apr–Mar) with Settings close/lock controls
+- Financial Reports: balance sheet, income statement, cash flow, retained earnings
+- In-app update toast when a new Electron build is available
+- Page back navigation on nested screens
+- Clear multi-file import picker (select / add / remove export files)
+
+### Changed
+
+- Billing leave reset so draft invoices clear when leaving Billing
+- Daybook, party ledger/PDF, payroll, and invoice print refinements
+- Import guide copy for multi-file BUSY masters + transactions
+
 ## [1.1.0] - 2026-07-12
 
 ### Added

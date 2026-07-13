@@ -195,28 +195,62 @@ function BillingPageComponent() {
     },
   });
 
-  // Remember last billing subpage (kind) — do not persist form draft.
+  // Remember last billing kind only (never a billId draft).
   useEffect(() => {
     try {
-      sessionStorage.setItem(
-        "cf_last_billing_path",
-        window.location.pathname + window.location.search,
-      );
+      const kind = searchParams.get("kind");
+      const path =
+        kind && kind !== "sale" ? `/billing?kind=${kind}` : "/billing";
+      sessionStorage.setItem("cf_last_billing_path", path);
     } catch {
       // ignore
     }
   }, [searchParams]);
 
-  // Reset billing form when leaving the page.
+  // Apply reset when returning to billing after visiting another page.
   useEffect(() => {
-    return () => {
-      try {
-        sessionStorage.removeItem("cf_billing_draft");
-      } catch {
-        // ignore
-      }
-    };
-  }, []);
+    const billId = searchParams.get("billId");
+    if (billId && billId.trim().length > 0) return;
+
+    let needsReset = false;
+    try {
+      needsReset = sessionStorage.getItem("cf_billing_needs_reset") === "1";
+      if (needsReset) sessionStorage.removeItem("cf_billing_needs_reset");
+    } catch {
+      // ignore
+    }
+    if (!needsReset) return;
+
+    setSelectedBillId(null);
+    setExtLines(createDefaultExtLines());
+    setPaymentSplits([{ id: uid(), method: "cash", amount: 0 }]);
+    setCreatedBill(null);
+    setPostCreateOpen(false);
+
+    const kind = searchParams.get("kind");
+    const nextKind =
+      kind === "purchase" ||
+      kind === "sale_return" ||
+      kind === "purchase_return"
+        ? kind
+        : "sale";
+    const isReturn =
+      nextKind === "sale_return" || nextKind === "purchase_return";
+
+    form.reset({
+      billKind: nextKind,
+      billDate: new Date(),
+      partyId: "",
+      lines: [],
+      displayName: "",
+      paidAmount: 0,
+      paymentMode: isReturn ? "credit" : "cash",
+      bankAccountId: "",
+      paymentSplits: [],
+      notes: "",
+      allowNegativeStock: false,
+    });
+  }, [searchParams, form]);
 
   // Billing resets on leave; no draft restore.
 
@@ -727,7 +761,9 @@ function BillingPageComponent() {
     // Returns are credit notes by default — do not auto-mark as paid.
     if (isReturn) return;
     if (paymentMode === "mixed") return;
-    if (
+    if (paymentMode === "credit") {
+      form.setValue("paidAmount", 0);
+    } else if (
       paymentMode === "cash" ||
       paymentMode === "upi" ||
       paymentMode === "bank"
@@ -1496,7 +1532,15 @@ function BillingPageComponent() {
                 onValueChange={(val) => {
                   const mode = val as BillCreateInput["paymentMode"];
                   form.setValue("paymentMode", mode);
-                  if (mode === "mixed") {
+                  if (mode === "credit") {
+                    form.setValue("paidAmount", 0);
+                  } else if (
+                    mode === "cash" ||
+                    mode === "upi" ||
+                    mode === "bank"
+                  ) {
+                    form.setValue("paidAmount", computedTotal);
+                  } else if (mode === "mixed") {
                     setPaymentSplits([
                       { id: uid(), method: "cash", amount: 0 },
                     ]);
@@ -1516,7 +1560,14 @@ function BillingPageComponent() {
                 </SelectContent>
               </Select>
             </div>
-            {paymentMode !== "mixed" ? (
+            {paymentMode === "credit" ? (
+              <div className="space-y-1.5">
+                <Label>Paid amount</Label>
+                <div className="flex h-9 items-center rounded-md border border-dashed px-3 text-sm text-muted-foreground">
+                  Unpaid (credit)
+                </div>
+              </div>
+            ) : paymentMode !== "mixed" ? (
               <div className="space-y-1.5">
                 <Label htmlFor="paid">Paid amount</Label>
                 <Input

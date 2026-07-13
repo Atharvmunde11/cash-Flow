@@ -17,6 +17,20 @@ function formatMoney(n: number) {
   }).format(Number(n) || 0);
 }
 
+function formatRunningBalance(
+  partyType: string,
+  balance: number | null | undefined,
+) {
+  if (balance == null) return "-";
+  const n = Number(balance) || 0;
+  if (n === 0) return formatMoney(0);
+  const money = formatMoney(Math.abs(n));
+  if (partyType === "supplier") {
+    return n > 0 ? `${money} Cr` : `${money} Dr`;
+  }
+  return n > 0 ? `${money} Dr` : `${money} Cr`;
+}
+
 export async function renderPartyLedgerPdfBuffer(opts: {
   companyName: string;
   partyName: string;
@@ -155,7 +169,7 @@ export async function renderPartyLedgerPdfBuffer(opts: {
         r.mode,
         r.debit > 0 ? formatMoney(r.debit) : "-",
         r.credit > 0 ? formatMoney(r.credit) : "-",
-        r.balanceAfter != null ? formatMoney(r.balanceAfter) : "-",
+        formatRunningBalance(partyType, r.balanceAfter),
       ],
       false,
     );

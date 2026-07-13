@@ -1,7 +1,10 @@
 "use client";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { KeyboardShortcuts } from "@/components/layout/keyboard-shortcuts";
+import { UpdateAvailableToast } from "@/components/layout/update-available-toast";
+import { BillingLeaveReset } from "@/components/billing/billing-leave-reset";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
+import { PageBackButton } from "@/components/shared/page-back-button";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
@@ -29,11 +32,14 @@ export default function DashboardLayout({
       />
 
       <main className="flex-1 p-4 md:p-8 overflow-auto pb-12 relative">
+        <PageBackButton />
         {children}
       </main>
 
       <div className="print:hidden">
         <KeyboardShortcuts />
+        <UpdateAvailableToast />
+        <BillingLeaveReset />
       </div>
 
       <OnboardingFlow />

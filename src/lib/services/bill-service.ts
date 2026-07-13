@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { getNextBillNumber, type BillNumberKind } from "@/lib/counter";
 import { assertPartyForTransaction, partyBalanceDelta } from "@/lib/ledger";
 import type { BillCreateInput } from "@/lib/validations";
+import { assertDateWritable } from "@/lib/financial-year";
 
 type SundryChargeInput = {
   label: string;
@@ -143,6 +144,8 @@ export async function createBillWithSideEffects(
       bankAccountId: s.bankAccountId,
     }))
     .filter((s) => s.amount > 0);
+
+  await assertDateWritable(input.billDate);
 
   return db.$transaction(async (tx) => {
     let party = input.partyId

@@ -22,3 +22,27 @@ export function getPartyBalanceMeta(
     ? { amount: balance, label: "Receivable", tone: "positive" }
     : { amount: Math.abs(balance), label: "Advance", tone: "negative" };
 }
+
+/**
+ * Running ledger balance as Debit/Credit (never a minus sign).
+ * Customer: + = Dr (receivable), − = Cr (advance)
+ * Supplier: + = Cr (payable), − = Dr (advance)
+ */
+export function formatPartyRunningBalance(
+  partyType: "customer" | "supplier" | string,
+  balance: number | null | undefined,
+  formatMoneyFn: (n: number) => string,
+): string {
+  if (balance == null) return "-";
+  const n = Number(balance) || 0;
+  if (n === 0) return formatMoneyFn(0);
+
+  const abs = Math.abs(n);
+  const money = formatMoneyFn(abs);
+
+  if (partyType === "supplier") {
+    return n > 0 ? `${money} Cr` : `${money} Dr`;
+  }
+  return n > 0 ? `${money} Dr` : `${money} Cr`;
+}
+

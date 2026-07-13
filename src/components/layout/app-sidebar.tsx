@@ -19,6 +19,7 @@ import {
   Landmark,
   FolderTree,
   History,
+  PieChart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
@@ -151,10 +152,20 @@ const sections: { title: string; links: NavItem[] }[] = [
     title: "Finance",
     links: [
       {
+        href: "/reports",
+        label: "Financial Reports",
+        icon: PieChart,
+      },
+      {
         href: "/bank-accounts",
         label: "Bank Accounts",
         icon: Landmark,
         shortcut: "Ctrl+L",
+      },
+      {
+        href: "/settings",
+        label: "FY Settings",
+        icon: CalendarDays,
       },
     ],
   },

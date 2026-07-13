@@ -4,12 +4,22 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/format";
 import { endOfMonth, startOfMonth } from "@/lib/employee-dates";
 import { cn } from "@/lib/utils";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type Employee = {
   _id: string;
@@ -97,6 +107,7 @@ export default function PayrollsPage() {
   const [advanceDraft, setAdvanceDraft] = useState<Record<string, string>>({});
   const [payingId, setPayingId] = useState<string | null>(null);
   const [advancingId, setAdvancingId] = useState<string | null>(null);
+  const [voidAdvance, setVoidAdvance] = useState<AdvanceRow | null>(null);
 
   const { start: periodStart, end: periodEnd } = useMemo(
     () => monthBounds(month),
@@ -240,6 +251,26 @@ export default function PayrollsPage() {
     },
     onError: (e: Error) => toast.error(e.message),
     onSettled: () => setAdvancingId(null),
+  });
+
+  const deleteAdvance = useMutation({
+    mutationFn: async (row: AdvanceRow) => {
+      const res = await fetch(`/api/employees/${row.employeeId}/advances`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: row._id }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to delete advance");
+      return row;
+    },
+    onSuccess: (row) => {
+      toast.success(`Removed advance for ${row.employeeName}`);
+      setVoidAdvance(null);
+      qc.invalidateQueries({ queryKey: ["advances"] });
+      qc.invalidateQueries({ queryKey: ["employees"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const recentPayrolls = (payrolls.data ?? []).slice(0, 12);
@@ -437,9 +468,22 @@ export default function PayrollsPage() {
                     {new Date(row.date).toLocaleDateString()}
                   </span>
                 </span>
-                <span className="tabular-nums text-amber-600 dark:text-amber-400">
-                  {formatMoney(row.amount)}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="tabular-nums text-amber-600 dark:text-amber-400">
+                    {formatMoney(row.amount)}
+                  </span>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-7 text-muted-foreground hover:text-destructive"
+                    aria-label={`Delete advance for ${row.employeeName}`}
+                    disabled={deleteAdvance.isPending}
+                    onClick={() => setVoidAdvance(row)}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
@@ -483,6 +527,36 @@ export default function PayrollsPage() {
           ) : null}
         </div>
       </div>
+
+      <AlertDialog
+        open={Boolean(voidAdvance)}
+        onOpenChange={(open) => {
+          if (!open) setVoidAdvance(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete advance?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {voidAdvance
+                ? `Remove the ${formatMoney(voidAdvance.amount)} advance for ${voidAdvance.employeeName}? This cannot be undone.`
+                : "Remove this advance entry?"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteAdvance.isPending || !voidAdvance}
+              onClick={(event) => {
+                event.preventDefault();
+                if (voidAdvance) deleteAdvance.mutate(voidAdvance);
+              }}
+            >
+              {deleteAdvance.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

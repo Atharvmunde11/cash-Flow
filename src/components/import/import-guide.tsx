@@ -44,7 +44,8 @@ export function ImportGuide() {
               need — or export masters + vouchers in one file if Tally allows.
             </li>
             <li>
-              Upload the <code className="text-xs">.xml</code> file below.
+              Upload the <code className="text-xs">.xml</code> file(s) below —
+              you can select masters and vouchers together.
             </li>
           </ol>
           <p className="mt-2 text-muted-foreground">
@@ -70,12 +71,14 @@ export function ImportGuide() {
               Purchase, Receipt, Payment).
             </li>
             <li>
-              Select <strong>multiple .dat files at once</strong> (e.g. masters +
-              transactions) — CashFlow merges them in one import.
+              Use <strong>Select multiple files</strong> below and pick masters +
+              transactions together (Ctrl/⌘-click in the dialog) — CashFlow merges
+              them in one import.
             </li>
             <li>
-              Upload the exported file below. For <code className="text-xs">.dat</code>{" "}
-              files, set <strong>Source software</strong> to <strong>BUSY</strong>.
+              For <code className="text-xs">.dat</code> files, set{" "}
+              <strong>Source software</strong> to <strong>BUSY</strong> (auto-set
+              when you pick a .dat).
             </li>
           </ol>
           <p className="mt-2 text-muted-foreground">

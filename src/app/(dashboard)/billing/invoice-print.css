@@ -126,27 +126,32 @@
   /* ── Header ──────────────────────────────────────────────────────────────── */
   .inv-header {
     display: flex !important;
-    justify-content: space-between !important;
-    align-items: flex-start !important;
-    gap: 10mm !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 3mm !important;
     margin-bottom: 4mm !important;
   }
 
-  .inv-header-left {
-    flex: 1 1 auto !important;
+  .inv-header-brand {
+    text-align: center !important;
+    width: 100% !important;
   }
 
-  .inv-header-right {
-    flex: 0 0 auto !important;
-    text-align: right !important;
+  .inv-header-meta {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: flex-start !important;
+    gap: 8mm !important;
+    width: 100% !important;
   }
 
   .inv-company-name {
-    font-size: 18pt !important;
+    font-size: 13pt !important;
     font-weight: 700 !important;
     letter-spacing: -0.01em !important;
     margin: 0 0 1mm 0 !important;
-    line-height: 1.2 !important;
+    line-height: 1.25 !important;
+    text-align: center !important;
   }
 
   .inv-company-gstin {
@@ -155,6 +160,7 @@
     margin: 0 0 1mm 0 !important;
     font-family: "Courier New", monospace !important;
     letter-spacing: 0.04em !important;
+    text-align: center !important;
   }
 
   .inv-company-addr {
@@ -162,14 +168,15 @@
     color: #444 !important;
     margin: 0 !important;
     line-height: 1.5 !important;
+    text-align: center !important;
   }
 
   .inv-title {
-    font-size: 20pt !important;
+    font-size: 14pt !important;
     font-weight: 800 !important;
     letter-spacing: 0.08em !important;
     text-transform: uppercase !important;
-    margin: 0 0 3mm 0 !important;
+    margin: 0 !important;
     line-height: 1 !important;
   }
 

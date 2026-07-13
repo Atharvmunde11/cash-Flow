@@ -172,7 +172,7 @@ export function InvoicePrint({ data }: { data: InvoiceData }) {
         <div className="inv-sheet-top">
           {/* ── Header ── */}
           <header className="inv-header">
-            <div className="inv-header-left">
+            <div className="inv-header-brand">
               <h1 className="inv-company-name">{company.name}</h1>
               {company.gstin && (
                 <p className="inv-company-gstin">GSTIN: {company.gstin}</p>
@@ -190,15 +190,19 @@ export function InvoicePrint({ data }: { data: InvoiceData }) {
                     .join(", ")}
                 </p>
               )}
-              {company.phone && (
-                <p className="inv-company-addr">Ph: {company.phone}</p>
-              )}
-              {company.email && (
-                <p className="inv-company-addr">{company.email}</p>
+              {(company.phone || company.email) && (
+                <p className="inv-company-addr">
+                  {[
+                    company.phone ? `Ph: ${company.phone}` : null,
+                    company.email || null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
               )}
             </div>
 
-            <div className="inv-header-right">
+            <div className="inv-header-meta">
               <h2 className="inv-title">{billTitle(billKind)}</h2>
               <table className="inv-meta-table">
                 <tbody>

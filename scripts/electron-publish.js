@@ -129,6 +129,11 @@ assertManifests();
 const releaseNotes = [
   `CashFlow ${version}`,
   "",
+  "## Highlights",
+  "- Financial year locking (Indian Apr–Mar) and Settings close controls",
+  "- Financial Reports: balance sheet, P&L, cash flow, retained earnings",
+  "- Multi-file import picker and in-app update notifications",
+  "",
   "Windows installers:",
   `- x64: CashFlow-x64-Setup-${version}.exe`,
   `- arm64: CashFlow-arm64-Setup-${version}.exe`,
@@ -138,6 +143,8 @@ const releaseNotes = [
   "- latest-arm64.yml (arm64)",
   "",
   "Upgrading keeps your local SQLite database in the app userData folder.",
+  "",
+  "See CHANGELOG.md for the full list.",
 ].join("\n");
 
 const notesPath = path.join(distDir, `.release-notes-${version}.md`);

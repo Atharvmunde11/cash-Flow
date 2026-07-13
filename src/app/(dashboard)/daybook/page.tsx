@@ -87,6 +87,11 @@ type DaybookResponse = {
     expenses: number;
     billCount: number;
     returnCount: number;
+    purchaseCash: number;
+    receiptCash: number;
+    paymentCash: number;
+    saleReturnCash: number;
+    purchaseReturnCash: number;
     closingCash: number;
   };
 };
@@ -283,27 +288,33 @@ export default function DaybookPage() {
     [expenses],
   );
   const returns = daybook.data?.returns ?? [];
-  const saleReturnCash = returns
-    .filter((r) => r.billKind === "sale_return")
-    .reduce((s, r) => s + r.cash, 0);
-  const purchaseReturnCash = returns
-    .filter((r) => r.billKind === "purchase_return")
-    .reduce((s, r) => s + r.cash, 0);
+  const totals = daybook.data?.totals;
+  const saleReturnCash = totals?.saleReturnCash ?? 0;
+  const purchaseReturnCash = totals?.purchaseReturnCash ?? 0;
+  const purchaseCash = totals?.purchaseCash ?? 0;
+  const receiptCash = totals?.receiptCash ?? 0;
+  const paymentCash = totals?.paymentCash ?? 0;
   const closingCash = useMemo(() => {
-    const billCash = daybook.data?.totals.cash ?? 0;
+    const billCash = totals?.cash ?? 0;
     return (
       (Number(morningCash) || 0) +
-      billCash -
+      billCash +
+      receiptCash +
+      purchaseReturnCash -
       expenseTotal -
-      saleReturnCash +
-      purchaseReturnCash
+      saleReturnCash -
+      paymentCash -
+      purchaseCash
     );
   }, [
-    daybook.data?.totals.cash,
+    totals?.cash,
     expenseTotal,
     morningCash,
     purchaseReturnCash,
     saleReturnCash,
+    receiptCash,
+    paymentCash,
+    purchaseCash,
   ]);
 
   const billCount = daybook.data?.totals.billCount ?? 0;
@@ -459,11 +470,66 @@ export default function DaybookPage() {
             />
             <StatTile
               label="Closing cash"
-              value={formatMoney(closingCash)}
-              hint="Morning + cash − expenses − sale returns"
+              value={
+                closingCash < 0
+                  ? `${formatMoney(Math.abs(closingCash))} short`
+                  : formatMoney(closingCash)
+              }
+              hint="Morning + sales + receipts + purchase returns − expenses − sale returns − payments − purchases"
               icon={BookOpen}
               accent="closing"
             />
+          </div>
+
+          <div className="grid gap-2 rounded-lg border p-3 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4">
+            <div className="flex justify-between gap-2">
+              <span>Morning</span>
+              <span className="tabular-nums text-foreground">
+                {formatMoney(Number(morningCash) || 0)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span>+ Sale cash</span>
+              <span className="tabular-nums text-emerald-600 dark:text-emerald-400">
+                {formatMoney(totals?.cash ?? 0)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span>+ Receipts (cash)</span>
+              <span className="tabular-nums text-emerald-600 dark:text-emerald-400">
+                {formatMoney(receiptCash)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span>+ Purchase returns</span>
+              <span className="tabular-nums text-emerald-600 dark:text-emerald-400">
+                {formatMoney(purchaseReturnCash)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span>− Expenses</span>
+              <span className="tabular-nums text-red-600 dark:text-red-400">
+                {formatMoney(expenseTotal)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span>− Sale returns</span>
+              <span className="tabular-nums text-red-600 dark:text-red-400">
+                {formatMoney(saleReturnCash)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span>− Payments (cash)</span>
+              <span className="tabular-nums text-red-600 dark:text-red-400">
+                {formatMoney(paymentCash)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span>− Purchase cash</span>
+              <span className="tabular-nums text-red-600 dark:text-red-400">
+                {formatMoney(purchaseCash)}
+              </span>
+            </div>
           </div>
 
           <div className="grid gap-6 lg:grid-cols-[minmax(0,220px)_1fr]">
@@ -653,7 +719,23 @@ export default function DaybookPage() {
                         </Link>
                       </td>
                       <td className="border-r border-border px-2 py-1.5 text-right tabular-nums">
-                        {formatMoney(ret.total)}
+                        {ret.cash > 0 ? (
+                          <span
+                            className={
+                              ret.billKind === "sale_return"
+                                ? "text-red-600 dark:text-red-400"
+                                : "text-emerald-600 dark:text-emerald-400"
+                            }
+                          >
+                            {ret.billKind === "sale_return" ? "−" : "+"}
+                            {formatMoney(ret.cash)}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            {formatMoney(ret.total)}
+                            <span className="ml-1 text-[10px]">(non-cash)</span>
+                          </span>
+                        )}
                       </td>
                       <td className="px-1 py-0.5 text-center text-muted-foreground">
                         —

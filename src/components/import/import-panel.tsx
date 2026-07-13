@@ -1,13 +1,12 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { Trash2, Upload } from "lucide-react";
+import { FilePlus2, Trash2, Upload, X } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -17,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ImportGuide } from "@/components/import/import-guide";
+import { cn } from "@/lib/utils";
 
 export type ImportResult = {
   source: string;
@@ -45,9 +45,27 @@ type ImportPanelProps = {
 };
 
 const isDev = process.env.NODE_ENV === "development";
+const IMPORT_ACCEPT = ".xml,.dat,.csv,text/xml,text/csv";
+
+function fileKey(file: File) {
+  return `${file.name}-${file.size}-${file.lastModified}`;
+}
+
+function mergeUniqueFiles(existing: File[], incoming: File[]) {
+  const seen = new Set(existing.map(fileKey));
+  const next = [...existing];
+  for (const file of incoming) {
+    const key = fileKey(file);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(file);
+  }
+  return next;
+}
 
 export function ImportPanel({ onImported, showGuide = true }: ImportPanelProps) {
   const qc = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importSource, setImportSource] = useState<"auto" | "tally" | "busy">(
     "auto",
@@ -55,6 +73,15 @@ export function ImportPanel({ onImported, showGuide = true }: ImportPanelProps) 
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const [includeVouchers, setIncludeVouchers] = useState(true);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+
+  const applySelectedFiles = (incoming: File[]) => {
+    if (incoming.length === 0) return;
+    setImportFiles((prev) => mergeUniqueFiles(prev, incoming));
+    setImportResult(null);
+    if (incoming.some((f) => f.name.toLowerCase().endsWith(".dat"))) {
+      setImportSource("busy");
+    }
+  };
 
   const runImport = useMutation({
     mutationFn: async () => {
@@ -155,32 +182,108 @@ export function ImportPanel({ onImported, showGuide = true }: ImportPanelProps) 
         </div>
       </div>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="importFiles">Export files</Label>
-        <Input
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor="importFiles">Export files</Label>
+          {importFiles.length > 0 ? (
+            <span className="text-xs text-muted-foreground">
+              {importFiles.length} file{importFiles.length === 1 ? "" : "s"}{" "}
+              selected
+            </span>
+          ) : null}
+        </div>
+
+        <input
+          ref={fileInputRef}
           id="importFiles"
           type="file"
           multiple
-          accept=".xml,.dat,.csv,text/xml,text/csv"
+          accept={IMPORT_ACCEPT}
+          className="sr-only"
           onChange={(e) => {
-            const list = Array.from(e.target.files ?? []);
-            setImportFiles(list);
-            setImportResult(null);
-            if (list.some((f) => f.name.toLowerCase().endsWith(".dat"))) {
-              setImportSource("busy");
-            }
+            applySelectedFiles(Array.from(e.target.files ?? []));
+            // Allow picking the same file again after remove / re-add
+            e.target.value = "";
           }}
         />
-        {importFiles.length > 0 ? (
-          <ul className="text-xs text-muted-foreground list-disc pl-4 space-y-0.5">
-            {importFiles.map((file) => (
-              <li key={`${file.name}-${file.size}`}>{file.name}</li>
-            ))}
-          </ul>
-        ) : null}
+
+        <div
+          className={cn(
+            "rounded-lg border border-dashed p-4 transition-colors",
+            importFiles.length > 0
+              ? "border-border bg-muted/20"
+              : "border-muted-foreground/30 bg-muted/10",
+          )}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="gap-2"
+              disabled={runImport.isPending}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <FilePlus2 className="size-4" />
+              {importFiles.length === 0
+                ? "Select multiple files"
+                : "Add more files"}
+            </Button>
+            {importFiles.length > 0 ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={runImport.isPending}
+                onClick={() => {
+                  setImportFiles([]);
+                  setImportResult(null);
+                }}
+              >
+                Clear all
+              </Button>
+            ) : null}
+          </div>
+
+          {importFiles.length > 0 ? (
+            <ul className="mt-3 space-y-1.5">
+              {importFiles.map((file) => (
+                <li
+                  key={fileKey(file)}
+                  className="flex items-center justify-between gap-2 rounded-md border bg-background px-2.5 py-1.5 text-sm"
+                >
+                  <span className="min-w-0 truncate" title={file.name}>
+                    {file.name}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-7 shrink-0"
+                    disabled={runImport.isPending}
+                    aria-label={`Remove ${file.name}`}
+                    onClick={() =>
+                      setImportFiles((prev) =>
+                        prev.filter((f) => fileKey(f) !== fileKey(file)),
+                      )
+                    }
+                  >
+                    <X className="size-3.5" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Hold <kbd className="rounded border px-1">Ctrl</kbd> (or{" "}
+              <kbd className="rounded border px-1">⌘</kbd>) to pick several
+              files in the dialog — e.g. BUSY masters + transactions.
+            </p>
+          )}
+        </div>
+
         <p className="text-xs text-muted-foreground">
-          Select one or more files. Accepted: <code>.xml</code>,{" "}
-          <code>.dat</code> (XML), <code>.csv</code>.
+          Accepted: <code>.xml</code>, <code>.dat</code> (XML),{" "}
+          <code>.csv</code>. Multiple files are merged in one import.
         </p>
       </div>
 

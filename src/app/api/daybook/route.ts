@@ -25,8 +25,8 @@ function tenderBreakdown(bill: {
     let cash = 0;
     let online = 0;
     for (const split of splits) {
-      if (split.method === "cash") cash += split.amount;
-      else online += split.amount;
+      if (split.method === "cash") cash += Number(split.amount) || 0;
+      else online += Number(split.amount) || 0;
     }
     return { cash, online };
   }
@@ -36,10 +36,53 @@ function tenderBreakdown(bill: {
   if (bill.paymentMode === "upi" || bill.paymentMode === "bank") {
     return { cash: 0, online: paid };
   }
+  // Mixed without split rows: treat as unknown online/cash mix — don't
+  // assume all cash (previous bug). Prefer online=0, cash=0 until splits exist.
   if (bill.paymentMode === "mixed") {
-    return { cash: paid, online: 0 };
+    return { cash: 0, online: 0 };
   }
   return { cash: 0, online: 0 };
+}
+
+function paymentCashAmount(payment: {
+  paymentMode: string;
+  amount: number;
+}) {
+  if (payment.paymentMode === "cash") return Number(payment.amount) || 0;
+  return 0;
+}
+
+/**
+ * Closing cash (cash in hand):
+ *   Morning
+ * + sale cash
+ * + cash receipts (party vouchers received)
+ * + purchase-return cash
+ * − expenses
+ * − sale-return cash
+ * − cash payments (party vouchers paid)
+ * − purchase cash
+ */
+function computeClosingCash(opts: {
+  morning: number;
+  saleCash: number;
+  receiptCash: number;
+  purchaseReturnCash: number;
+  expenses: number;
+  saleReturnCash: number;
+  paymentCash: number;
+  purchaseCash: number;
+}) {
+  return (
+    opts.morning +
+    opts.saleCash +
+    opts.receiptCash +
+    opts.purchaseReturnCash -
+    opts.expenses -
+    opts.saleReturnCash -
+    opts.paymentCash -
+    opts.purchaseCash
+  );
 }
 
 export async function GET(req: Request) {
@@ -54,7 +97,14 @@ export async function GET(req: Request) {
     const { start, end, noon } = dayBounds(base);
     const dateKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
 
-    const [daybook, bills, returnBills, expenseRows] = await Promise.all([
+    const [
+      daybook,
+      bills,
+      purchaseBills,
+      returnBills,
+      expenseRows,
+      payments,
+    ] = await Promise.all([
       db.daybook.findFirst({
         where: {
           date: {
@@ -76,6 +126,16 @@ export async function GET(req: Request) {
       }),
       db.bill.findMany({
         where: {
+          billKind: "purchase",
+          billDate: { gte: start, lt: end },
+        },
+        orderBy: [{ billDate: "asc" }, { createdAt: "asc" }],
+        include: {
+          paymentSplits: true,
+        },
+      }),
+      db.bill.findMany({
+        where: {
           billKind: { in: ["sale_return", "purchase_return"] },
           billDate: { gte: start, lt: end },
         },
@@ -87,6 +147,10 @@ export async function GET(req: Request) {
       db.daybookExpense.findMany({
         where: { date: { gte: start, lt: end } },
         orderBy: [{ createdAt: "asc" }],
+      }),
+      db.payment.findMany({
+        where: { date: { gte: start, lt: end } },
+        orderBy: [{ date: "asc" }, { createdAt: "asc" }],
       }),
     ]);
 
@@ -107,6 +171,19 @@ export async function GET(req: Request) {
         cash: tender.cash,
         online: tender.online,
         sundry,
+      };
+    });
+
+    const purchases = purchaseBills.map((bill) => {
+      const tender = tenderBreakdown(bill);
+      return {
+        id: bill.id,
+        billNumber: bill.billNumber,
+        displayName: bill.displayName,
+        paymentMode: bill.paymentMode,
+        total: bill.total,
+        cash: tender.cash,
+        online: tender.online,
       };
     });
 
@@ -158,7 +235,26 @@ export async function GET(req: Request) {
     const purchaseReturnCash = returns
       .filter((r) => r.billKind === "purchase_return")
       .reduce((s, r) => s + r.cash, 0);
+    const purchaseCash = purchases.reduce((s, r) => s + r.cash, 0);
+
+    const receiptCash = payments
+      .filter((p) => p.direction === "received")
+      .reduce((s, p) => s + paymentCashAmount(p), 0);
+    const paymentCash = payments
+      .filter((p) => p.direction === "paid")
+      .reduce((s, p) => s + paymentCashAmount(p), 0);
+
     const morning = daybook?.morningCash ?? 0;
+    const closingCash = computeClosingCash({
+      morning,
+      saleCash: cashTotal,
+      receiptCash,
+      purchaseReturnCash,
+      expenses: expenseTotal,
+      saleReturnCash,
+      paymentCash,
+      purchaseCash,
+    });
 
     return jsonOk({
       date: dateKey,
@@ -167,6 +263,7 @@ export async function GET(req: Request) {
       saved: Boolean(daybook),
       daybook: daybook ? withMongoId(daybook) : null,
       bills: withMongoIds(rows),
+      purchases: withMongoIds(purchases),
       returns: withMongoIds(returns),
       sundries: sundryEntries,
       expenses,
@@ -177,8 +274,12 @@ export async function GET(req: Request) {
         expenses: expenseTotal,
         billCount: rows.length,
         returnCount: returns.length,
-        closingCash:
-          morning + cashTotal - expenseTotal - saleReturnCash + purchaseReturnCash,
+        purchaseCash,
+        receiptCash,
+        paymentCash,
+        saleReturnCash,
+        purchaseReturnCash,
+        closingCash,
       },
       _meta: { noon: noon.toISOString() },
     });

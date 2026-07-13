@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { ImportPanel } from "@/components/import/import-panel";
 import { AppUpdatePanel } from "@/components/settings/app-update-panel";
 import { CustomSundrySettingsPanel } from "@/components/forms/sundry-combobox";
+import { FinancialYearPanel } from "@/components/settings/financial-year-panel";
 
 type BusinessProfile = { name: string; address: string; phone: string };
 
@@ -120,6 +121,8 @@ export default function SettingsPage() {
           <p className="text-sm text-destructive">Failed to load settings.</p>
         ) : null}
       </div>
+
+      <FinancialYearPanel />
 
       <AppUpdatePanel />
 

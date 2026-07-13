@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/table";
 import { formatMoney } from "@/lib/format";
 import { Button } from "@/components/ui/button";
-import { getPartyBalanceMeta } from "@/lib/party-balance";
+import { getPartyBalanceMeta, formatPartyRunningBalance } from "@/lib/party-balance";
 import { PaginationControls } from "@/components/shared/pagination-controls";
 import "./party-ledger-print.css";
 import {
@@ -112,11 +112,17 @@ async function fetchLedger(id: string) {
   return (await res.json()) as LedgerResponse;
 }
 
-async function fetchBusinessName() {
+async function fetchBusinessProfile() {
   const res = await fetch("/api/settings/business");
-  if (!res.ok) return "CashFlow";
-  const json = (await res.json()) as { data?: { name?: string } };
-  return json.data?.name?.trim() || "CashFlow";
+  if (!res.ok) return { name: "CashFlow", address: "", phone: "" };
+  const json = (await res.json()) as {
+    data?: { name?: string; address?: string; phone?: string };
+  };
+  return {
+    name: json.data?.name?.trim() || "CashFlow",
+    address: json.data?.address ?? "",
+    phone: json.data?.phone ?? "",
+  };
 }
 
 export default function PartyLedgerPage() {
@@ -157,7 +163,7 @@ function PartyLedgerPageInner() {
 
   const businessQ = useQuery({
     queryKey: ["business-profile"],
-    queryFn: fetchBusinessName,
+    queryFn: fetchBusinessProfile,
   });
 
   const deleteParty = useMutation({
@@ -277,45 +283,58 @@ function PartyLedgerPageInner() {
     bills.forEach((bill) => {
       const paid = bill.paidAmount ?? 0;
       const total = bill.total ?? 0;
-      const due = Math.max(0, total - paid);
       const billId = bill._id;
-
-      let debit = 0;
-      let credit = 0;
-      if (bill.billKind === "sale_return") {
-        // Credit note to customer: show return as credit, refund as debit.
-        credit = total;
-        debit = paid;
-      } else if (bill.billKind === "purchase_return") {
-        debit = total;
-        credit = paid;
-      } else if (isSupplier) {
-        debit = paid;
-        credit = due;
-      } else {
-        debit = due;
-        credit = paid;
-      }
+      const billDate = new Date(bill.billDate ?? bill.createdAt);
 
       const related = transactions
         .filter((transaction) => transaction.billId === billId)
         .sort(
           (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
         );
-      const balanceAfter =
-        related.length > 0
-          ? (related[related.length - 1]?.balanceAfterParty ?? null)
-          : null;
+
+      const paymentRefTypes = new Set([
+        "bill_payment",
+        "purchase_payment",
+        "sale_return_payment",
+        "purchase_return_payment",
+      ]);
+      const paymentRows = related.filter((t) =>
+        paymentRefTypes.has(t.refType ?? ""),
+      );
+      const paidFromLedger = paymentRows.reduce(
+        (sum, row) => sum + (Number(row.amount) || 0),
+        0,
+      );
+      const paidAmount = paidFromLedger > 0 ? paidFromLedger : paid;
+
+      // Same line: invoice amount in debit (or credit for purchases/returns),
+      // and any payment in the opposite column.
+      let debit = 0;
+      let credit = 0;
+      if (bill.billKind === "sale_return") {
+        credit = total;
+        debit = paidAmount;
+      } else if (bill.billKind === "purchase_return") {
+        debit = total;
+        credit = paidAmount;
+      } else if (bill.billKind === "purchase" || isSupplier) {
+        credit = total;
+        debit = paidAmount;
+      } else {
+        debit = total;
+        credit = paidAmount;
+      }
 
       out.push({
         id: bill._id,
         type: "bill",
-        date: new Date(bill.billDate ?? bill.createdAt),
+        date: billDate,
         description: `Bill ${bill.billNumber}`,
         paymentMode: bill.paymentMode,
         billNumber: bill.billNumber,
         billKind: bill.billKind,
-        balanceAfter,
+        balanceAfter:
+          related[related.length - 1]?.balanceAfterParty ?? null,
         debit,
         credit,
       });
@@ -327,14 +346,24 @@ function PartyLedgerPageInner() {
 
   const filteredActivity =
     activityFilter === "payments"
-      ? activityItems.filter((item) => item.type === "payment")
+      ? activityItems.filter(
+          (item) =>
+            item.type === "payment" ||
+            (item.type === "bill" &&
+              (item.debit ?? 0) > 0 &&
+              (item.credit ?? 0) > 0),
+        )
       : activityFilter === "bills"
         ? activityItems.filter((item) => item.type === "bill")
         : activityItems;
 
   const printableActivity = useMemo(() => {
     return printMode === "payments"
-      ? activityItems.filter((i) => i.type === "payment")
+      ? activityItems.filter(
+          (i) =>
+            i.type === "payment" ||
+            (i.type === "bill" && (i.debit ?? 0) > 0 && (i.credit ?? 0) > 0),
+        )
       : printMode === "bills"
         ? activityItems.filter((i) => i.type === "bill")
         : activityItems;
@@ -366,7 +395,7 @@ function PartyLedgerPageInner() {
         <div className="pl-header">
           <div>
             <p className="pl-title">
-              {businessQ.data ?? "CashFlow"}
+              {businessQ.data?.name ?? "CashFlow"}
             </p>
             <p className="pl-sub">
               {party.name} • {party.partyType} • Statement ({printMode})
@@ -374,11 +403,17 @@ function PartyLedgerPageInner() {
             <p className="pl-sub">
               Date: <span className="pl-muted">{statementDate}</span>
             </p>
-            {(party.address || party.phone) && (
+            {(typeof party.address === "string" && party.address) ||
+            (typeof party.phone === "string" && party.phone) ? (
               <p className="pl-sub pl-muted">
-                {[party.address, party.phone].filter(Boolean).join(" • ")}
+                {[
+                  typeof party.address === "string" ? party.address : "",
+                  typeof party.phone === "string" ? party.phone : "",
+                ]
+                  .filter(Boolean)
+                  .join(" • ")}
               </p>
-            )}
+            ) : null}
           </div>
           <div className="pl-meta">
             <div>
@@ -424,7 +459,11 @@ function PartyLedgerPageInner() {
                     : "-"}
                 </td>
                 <td className="pl-right pl-muted">
-                  {item.balanceAfter != null ? formatMoney(item.balanceAfter) : "-"}
+                  {formatPartyRunningBalance(
+                    party.partyType,
+                    item.balanceAfter,
+                    formatMoney,
+                  )}
                 </td>
               </tr>
             ))}
@@ -625,9 +664,11 @@ function PartyLedgerPageInner() {
                     )}
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground tabular-nums">
-                    {item.balanceAfter != null
-                      ? formatMoney(item.balanceAfter)
-                      : "-"}
+                    {formatPartyRunningBalance(
+                      party.partyType,
+                      item.balanceAfter,
+                      formatMoney,
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

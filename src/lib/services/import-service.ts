@@ -12,6 +12,7 @@ import type {
 } from "@/lib/import/parse-import-file";
 import { createBillWithSideEffects } from "@/lib/services/bill-service";
 import { ensureSqliteSchema } from "@/lib/ensure-sqlite-schema";
+import { assertDateWritable, getFinancialYearConfig, isDateLocked } from "@/lib/financial-year";
 
 const MISC_ITEM_NAME = "Imported line item";
 
@@ -708,9 +709,26 @@ export async function importParsedData(
   mode: "merge" | "replace",
   options?: { includeVouchers?: boolean },
 ): Promise<ImportResult> {
+  const includeVouchers = options?.includeVouchers ?? true;
+
+  if (includeVouchers) {
+    const config = await getFinancialYearConfig();
+    for (const bill of data.bills) {
+      await assertDateWritable(bill.billDate, config);
+    }
+    for (const payment of data.payments) {
+      await assertDateWritable(payment.date, config);
+    }
+    
+    // Also, if replace mode, we should ideally check if we are deleting locked vouchers.
+    // For now, if replace mode is used and we have any locked years, it might be dangerous.
+    if (mode === "replace" && config.earlyClosedEnds.length > 0) {
+      throw new Error("Replace import is blocked because there are closed financial years. Please use merge or create a new company.");
+    }
+  }
+
   await ensureCoaModelsReady();
 
-  const includeVouchers = options?.includeVouchers ?? true;
   const warnings: string[] = [];
   const counts = {
     accountGroupsCreated: 0,

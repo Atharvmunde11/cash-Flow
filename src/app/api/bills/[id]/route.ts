@@ -3,6 +3,7 @@ import { partyBalanceDelta } from "@/lib/ledger";
 import { jsonError, jsonOk } from "@/lib/http";
 import { withMongoId } from "@/lib/id-compat";
 import { z } from "zod";
+import { assertDateWritable } from "@/lib/financial-year";
 
 export const runtime = "nodejs";
 
@@ -142,6 +143,11 @@ export async function PATCH(
       include: { lines: true },
     });
     if (!bill) return jsonError("Not found", 404);
+
+    await assertDateWritable(bill.billDate);
+    if (parsed.data.billDate) {
+      await assertDateWritable(parsed.data.billDate);
+    }
 
     const result = await db.$transaction(async (tx) => {
       const originalKind = bill.billKind ?? "sale";
@@ -418,6 +424,8 @@ export async function DELETE(
       include: { lines: true },
     });
     if (!bill) return jsonError("Not found", 404);
+
+    await assertDateWritable(bill.billDate);
 
     await db.$transaction(async (tx) => {
       // Reverse stock changes

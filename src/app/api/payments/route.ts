@@ -4,6 +4,7 @@ import { jsonError, jsonOk } from "@/lib/http";
 import { partyBalanceDelta } from "@/lib/ledger";
 import { paymentCreateSchema } from "@/lib/validations";
 import type { Prisma } from "@prisma/client";
+import { assertDateWritable } from "@/lib/financial-year";
 
 export const runtime = "nodejs";
 
@@ -110,6 +111,8 @@ export async function POST(req: Request) {
     const parsed = paymentCreateSchema.safeParse(body);
     if (!parsed.success)
       return jsonError(JSON.stringify(parsed.error.flatten()), 422);
+
+    await assertDateWritable(parsed.data.date);
 
     const party = await db.party.findUnique({
       where: { id: parsed.data.partyId },

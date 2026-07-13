@@ -16,6 +16,20 @@ function balanceMeta(partyType: string, balance: number) {
     : { label: "You owe", amount: abs };
 }
 
+const PAYMENT_REFS = new Set([
+  "bill_payment",
+  "purchase_payment",
+  "sale_return_payment",
+  "purchase_return_payment",
+]);
+
+const INVOICE_REFS = new Set([
+  "bill_invoice",
+  "purchase_invoice",
+  "sale_return",
+  "purchase_return",
+]);
+
 export async function GET(
   req: Request,
   ctx: { params: Promise<{ id: string }> },
@@ -43,6 +57,7 @@ export async function GET(
         where: { partyId: id },
         orderBy: { billDate: "desc" },
         select: {
+          id: true,
           billNumber: true,
           billKind: true,
           billDate: true,
@@ -64,11 +79,21 @@ export async function GET(
       balanceAfter: number | null;
     }> = [];
 
+    const billIds = new Set(bills.map((b) => b.id));
+    const isSupplier = party.partyType === "supplier";
+
+    // Standalone ledger rows (not tied to a bill)
     for (const t of transactions) {
-      if (mode === "bills" || mode === "payments") continue;
+      if (t.billId && billIds.has(t.billId)) continue;
+      if (INVOICE_REFS.has(t.refType ?? "") || PAYMENT_REFS.has(t.refType ?? ""))
+        continue;
+      if (mode === "bills") continue;
+      if (mode === "payments" && t.entryType !== "credit" && t.entryType !== "debit")
+        continue;
+
       rows.push({
         date: new Date(t.date).toLocaleString(),
-        type: "Transaction",
+        type: t.paymentId ? "Payment" : "Transaction",
         description: t.notes || `${t.entryType} transaction`,
         mode: t.paymentMode,
         debit: t.entryType === "debit" ? Number(t.amount) || 0 : 0,
@@ -78,18 +103,49 @@ export async function GET(
     }
 
     for (const b of bills) {
-      if (mode === "payments") continue;
       const paid = Number(b.paidAmount) || 0;
-      const due = Math.max(0, (Number(b.total) || 0) - paid);
-      const supplier = party.partyType === "supplier";
+      const total = Number(b.total) || 0;
+      const related = transactions
+        .filter((t) => t.billId === b.id)
+        .sort(
+          (a, c) => new Date(a.date).getTime() - new Date(c.date).getTime(),
+        );
+      const paymentRows = related.filter((t) =>
+        PAYMENT_REFS.has(t.refType ?? ""),
+      );
+      const paidFromLedger = paymentRows.reduce(
+        (sum, row) => sum + (Number(row.amount) || 0),
+        0,
+      );
+      const paidAmount = paidFromLedger > 0 ? paidFromLedger : paid;
+
+      let debit = 0;
+      let credit = 0;
+      if (b.billKind === "sale_return") {
+        credit = total;
+        debit = paidAmount;
+      } else if (b.billKind === "purchase_return") {
+        debit = total;
+        credit = paidAmount;
+      } else if (b.billKind === "purchase" || isSupplier) {
+        credit = total;
+        debit = paidAmount;
+      } else {
+        debit = total;
+        credit = paidAmount;
+      }
+
+      if (mode === "payments" && paidAmount <= 0) continue;
+
       rows.push({
         date: new Date(b.billDate ?? b.createdAt).toLocaleString(),
         type: `${b.billKind ?? "sale"} bill`,
         description: `Bill ${b.billNumber}`,
         mode: b.paymentMode,
-        debit: supplier ? paid : due,
-        credit: supplier ? due : paid,
-        balanceAfter: null,
+        debit,
+        credit,
+        balanceAfter:
+          related[related.length - 1]?.balanceAfterParty ?? null,
       });
     }
 
